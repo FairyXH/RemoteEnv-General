@@ -1,0 +1,16 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/core",
+  "crates/platform-windows",
+  "crates/platform-android",
+  "crates/platform-linux",
+  "crates/platform-macos",
+  "app/desktop/src-tauri",
+]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+repository = "https://example.invalid/RemoteEnvCollector"

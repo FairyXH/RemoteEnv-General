@@ -1,0 +1,17 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "RemoteEnvCollector",
+  "version": "0.1.0",
+  "identifier": "com.remoteenv.collector",
+  "build": {
+    "beforeDevCommand": "npm --prefix ../../ui run dev",
+    "beforeBuildCommand": "npm --prefix ../../ui run build",
+    "devUrl": "http://localhost:1420",
+    "frontendDist": "../../ui/dist"
+  },
+  "app": {
+    "windows": [{ "title": "RemoteEnvCollector", "width": 480, "height": 620, "resizable": true }],
+    "security": { "csp": null }
+  },
+  "bundle": { "active": true, "targets": "all" }
+}

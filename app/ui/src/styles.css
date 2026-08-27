@@ -1,0 +1,53 @@
+:root {
+  color: #e9eef4;
+  background: #11161d;
+  font-family: Inter, "Segoe UI", sans-serif;
+  font-synthesis: none;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 320px; min-height: 100vh; }
+button { font: inherit; }
+
+.shell {
+  width: min(100%, 480px);
+  min-height: 100vh;
+  margin: 0 auto;
+  padding: 20px;
+  background: #151b23;
+}
+
+header, .section-heading, .row, footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+header { padding-bottom: 18px; border-bottom: 1px solid #2e3945; }
+h1, h2, p { margin: 0; }
+h1 { font-size: 21px; font-weight: 650; letter-spacing: 0; }
+h2 { font-size: 14px; font-weight: 650; }
+.eyebrow { color: #8ea1b5; font-size: 10px; letter-spacing: 0.08em; margin-bottom: 5px; }
+.state { color: #f1bc62; font-size: 13px; white-space: nowrap; }
+.state i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #f1bc62; margin-right: 6px; }
+.connection, .group, .metrics { margin-top: 16px; border: 1px solid #2e3945; background: #1b222c; border-radius: 7px; }
+.connection { display: grid; gap: 5px; padding: 15px; }
+.label, .muted, .row span, .section-heading span, footer span { color: #8ea1b5; font-size: 12px; }
+.connection strong { font-size: 15px; }
+.group { overflow: hidden; }
+.section-heading { padding: 13px 15px; border-bottom: 1px solid #2e3945; }
+.row { padding: 13px 15px; border-bottom: 1px solid #27313c; }
+.row:last-child { border-bottom: 0; }
+.row div { display: grid; gap: 3px; }
+.row strong { font-size: 14px; }
+.row b { color: #8ea1b5; font-variant-numeric: tabular-nums; }
+.metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.metrics div { display: grid; gap: 8px; padding: 13px; border-right: 1px solid #2e3945; }
+.metrics div:last-child { border-right: 0; }
+.metrics span { color: #8ea1b5; font-size: 11px; }
+.metrics strong { font-size: 13px; overflow-wrap: anywhere; }
+footer { margin-top: 16px; }
+button { border: 0; border-radius: 6px; padding: 9px 12px; background: #365f86; color: #eff6ff; cursor: pointer; }
+button:disabled { background: #2a3440; color: #8495a6; cursor: not-allowed; }
+
+@media (max-width: 360px) {
+  .shell { padding: 14px; }
+  .metrics { grid-template-columns: 1fr; }
+  .metrics div { border-right: 0; border-bottom: 1px solid #2e3945; }
+  .metrics div:last-child { border-bottom: 0; }
+}

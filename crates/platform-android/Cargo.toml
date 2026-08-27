@@ -1,0 +1,9 @@
+[package]
+name = "remote-env-platform-android"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+remote-env-core = { path = "../core" }

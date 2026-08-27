@@ -1,0 +1,20 @@
+[package]
+name = "remote-env-desktop"
+version = "0.1.0"
+description = "RemoteEnvCollector desktop/mobile shell"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+name = "remote_env_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+remote-env-core = { path = "../../../crates/core" }
+remote-env-platform-windows = { path = "../../../crates/platform-windows" }
+tauri = { version = "2", features = ["tray-icon"] }
+serde = { version = "1", features = ["derive"] }
