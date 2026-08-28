@@ -199,6 +199,23 @@ async fn wait_complete(store: &StateStore, device_id: &str, data_type: &str, seq
     .unwrap();
 }
 
+async fn wait_for_profiles(runtime: &RuntimeSupervisor, expected: &[&str]) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while runtime
+            .status()
+            .servers
+            .iter()
+            .map(|server| server.profile_id.as_str())
+            .collect::<Vec<_>>()
+            != expected
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
 #[tokio::test]
 async fn phase_175c_runtime_uses_independent_dual_servers_and_recovery() {
     let a = TestServer::start().await;
@@ -246,7 +263,7 @@ async fn phase_175c_runtime_uses_independent_dual_servers_and_recovery() {
             c
         })
         .unwrap();
-    wait_ready(&runtime, 1).await;
+    wait_for_profiles(&runtime, &["b"]).await;
     runtime.submit(event("single-b")).unwrap();
     let a_before = a.sequences().len();
     b.wait_for(|s| s.sequences().contains(&3)).await;
