@@ -65,7 +65,6 @@ struct ServerProfileInput {
     url: String,
     device_id: Option<String>,
     token: Option<String>,
-    enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -366,7 +365,6 @@ fn save_server_profile(
         profile.name = name.into();
         profile.url = url.into();
         profile.device_id = device_id.into();
-        profile.enabled = input.enabled;
         if let Some(token) = input.token.filter(|token| !token.is_empty()) {
             profile.token = token;
         }
@@ -381,7 +379,7 @@ fn save_server_profile(
             url: url.into(),
             device_id: device_id.into(),
             token,
-            enabled: input.enabled,
+            enabled: true,
         });
     }
     if config.active_server_id.is_none() {
@@ -396,6 +394,49 @@ fn save_server_profile(
 }
 
 #[tauri::command]
+fn disconnect_server_profile(
+    id: String,
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<RuntimeStatus, String> {
+    let (store, mut config) = load_config(&state.state_path)?;
+    let Some(profile) = config.server_profiles.iter_mut().find(|profile| profile.id == id) else {
+        return Err("未找到服务器配置。".into());
+    };
+    profile.enabled = false;
+    if config.active_server_id.as_deref() == Some(id.as_str()) {
+        config.active_server_id = config.server_profiles.iter().find(|item| item.id != id && item.enabled).map(|item| item.id.clone());
+    }
+    update_runtime(&state, &config)?;
+    save_config(&store, &config)?;
+    let status = current_status(&state)?;
+    let _ = app.emit(STATUS_EVENT, &status);
+    Ok(status)
+}
+
+#[tauri::command]
+fn set_server_enabled(
+    id: String,
+    enabled: bool,
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<RuntimeStatus, String> {
+    let (store, mut config) = load_config(&state.state_path)?;
+    let Some(profile) = config.server_profiles.iter_mut().find(|profile| profile.id == id) else {
+        return Err("未找到服务器配置。".into());
+    };
+    profile.enabled = enabled;
+    if enabled && config.server_mode == ServerMode::Single {
+        config.active_server_id = Some(id.clone());
+    }
+    update_runtime(&state, &config)?;
+    save_config(&store, &config)?;
+    let status = current_status(&state)?;
+    let _ = app.emit(STATUS_EVENT, &status);
+    Ok(status)
+}
+
+#[tauri::command]
 fn delete_server_profile(
     id: String,
     state: State<'_, AppState>,
@@ -405,7 +446,8 @@ fn delete_server_profile(
     if config.active_server_id.as_deref() == Some(&id) {
         config.active_server_id = config
             .server_profiles
-            .first()
+            .iter()
+            .find(|profile| profile.enabled)
             .map(|profile| profile.id.clone());
     }
     update_runtime(&state, &config)?;
@@ -468,7 +510,10 @@ fn connect_server_profile(
         return Err("请先完善服务器的设备 ID 和令牌。".into());
     }
     config.server_mode = ServerMode::Single;
-    config.active_server_id = Some(id);
+    config.active_server_id = Some(id.clone());
+    if let Some(profile) = config.server_profiles.iter_mut().find(|profile| profile.id == id) {
+        profile.enabled = true;
+    }
     config.validate().map_err(user_error)?;
     save_config(&store, &config)?;
     let mut guard = state
@@ -788,6 +833,8 @@ pub fn run() {
             delete_server_profile,
             set_runtime_options,
             connect_server_profile,
+            disconnect_server_profile,
+            set_server_enabled,
             scan_wifi_now,
             scan_bluetooth_now,
             test_server_profile,

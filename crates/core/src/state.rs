@@ -68,6 +68,26 @@ impl StateStore {
             .map(|v| v as u64))
     }
 
+    pub fn latest_sequence(&self, device_id: &str, data_type: &str) -> Result<u64, StateError> {
+        let connection = self.lock()?;
+        let sequence = connection
+            .query_row(
+                "SELECT MAX(CAST(json_extract(envelope_json, '$.sequence') AS INTEGER)) FROM upload_deliveries WHERE json_extract(envelope_json, '$.device_id')=?1 AND json_extract(envelope_json, '$.data_type')=?2",
+                params![device_id, data_type],
+                |row| row.get::<_, Option<i64>>(0),
+            )?
+            .unwrap_or(0);
+        let sequence_state = connection
+            .query_row(
+                "SELECT value FROM sequences WHERE device_id=?1 AND data_type=?2",
+                params![device_id, data_type],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?
+            .unwrap_or(0);
+        Ok(sequence.max(sequence_state) as u64)
+    }
+
     pub fn load_or_create_identity(
         &self,
         name: &str,
