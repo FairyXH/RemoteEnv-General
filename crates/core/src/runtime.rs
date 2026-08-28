@@ -58,12 +58,12 @@ impl PeriodicCollectorHandle {
             runtime.block_on(async move {
                 let mut enabled = enabled;
                 let mut ticker = tokio::time::interval(interval);
-                ticker.tick().await;
                 ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                 let mut total = 0;
                 let mut successful = 0;
                 let mut failed = 0;
                 let _ = statuses.send(WiFiRuntimeStatus { enabled, state: if enabled { WiFiRuntimeState::Starting } else { WiFiRuntimeState::Disabled }, ..Default::default() }).await;
+                if enabled { ticker.reset(); }
                 loop {
                     tokio::select! {
                         _ = ticker.tick(), if enabled => {
@@ -104,7 +104,9 @@ impl PeriodicCollectorHandle {
                                 }
                             }
                         },
-                        _ = tokio::time::sleep(Duration::from_millis(20)), if stop_for_thread.load(Ordering::Acquire) => break,
+                        _ = tokio::time::sleep(Duration::from_millis(20)) => {
+                            if stop_for_thread.load(Ordering::Acquire) { break; }
+                        },
                     }
                 }
                 let _ = statuses.send(WiFiRuntimeStatus { state: WiFiRuntimeState::Stopped, ..Default::default() }).await;
@@ -412,4 +414,75 @@ pub enum RuntimeError {
     EventChannelClosed,
     #[error("runtime thread failed to start: {0}")]
     Thread(String),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::AtomicUsize;
+
+    #[test]
+    fn periodic_collector_emits_events_and_stops() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let calls_for_scan = Arc::clone(&calls);
+        let scan: CollectorScan = Arc::new(move || {
+            calls_for_scan.fetch_add(1, Ordering::SeqCst);
+            Ok(CollectorEvent {
+                data_type: "wifi".into(),
+                timestamp_ms: 1,
+                data: serde_json::json!({ "networks": [{"bssid": "AA:BB:CC:DD:EE:FF"}] }),
+            })
+        });
+        let (events, mut event_rx) = mpsc::channel(4);
+        let (statuses, mut status_rx) = mpsc::channel(8);
+        let mut worker =
+            PeriodicCollectorHandle::start(scan, true, Duration::from_millis(20), events, statuses);
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        runtime.block_on(async {
+            let event = tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(event.data_type, "wifi");
+            let mut ready = false;
+            for _ in 0..8 {
+                if let Some(status) = status_rx.recv().await {
+                    ready |= status.state == WiFiRuntimeState::Ready;
+                }
+                if ready {
+                    break;
+                }
+            }
+            assert!(ready);
+        });
+        worker.stop();
+        assert!(calls.load(Ordering::SeqCst) >= 1);
+    }
+
+    #[test]
+    fn periodic_collector_disabled_does_not_scan() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let calls_for_scan = Arc::clone(&calls);
+        let scan: CollectorScan = Arc::new(move || {
+            calls_for_scan.fetch_add(1, Ordering::SeqCst);
+            Ok(CollectorEvent {
+                data_type: "wifi".into(),
+                timestamp_ms: 1,
+                data: serde_json::json!({}),
+            })
+        });
+        let (events, mut event_rx) = mpsc::channel(1);
+        let (statuses, _status_rx) = mpsc::channel(2);
+        let mut worker = PeriodicCollectorHandle::start(
+            scan,
+            false,
+            Duration::from_millis(10),
+            events,
+            statuses,
+        );
+        std::thread::sleep(Duration::from_millis(60));
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert!(event_rx.try_recv().is_err());
+        worker.stop();
+    }
 }

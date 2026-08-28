@@ -61,6 +61,8 @@ Event completion is target-scoped: an event is complete only when every selected
 
 `crates/core/tests/phase175c.rs` drives the live `RuntimeSupervisor -> DispatcherSupervisor -> ServerWorker` chain against independent A/B listeners. It verifies dual readiness, identical event envelopes, target-local recovery, Single-to-Multi and Multi-to-Single transitions, profile replacement/removal, rate-limit isolation, heartbeat observation, missing-pong reconnect, ACK isolation, and authentication blocking. The phase is Complete after the local gates and standalone Python real-backend verification passed.
 
-## Phase 2-A boundary
+## Phase 2-A Runtime integration
 
-The Windows Wi-Fi adapter is isolated in `remote-env-platform-windows::wifi`. It normalizes native WLAN BSS records to `WiFiObservation` and emits one snapshot `CollectorEvent` per scan. The current Tauri command is an explicit scan entry point; periodic Runtime scheduling is still pending.
+`RuntimeSupervisor::start_with_collector` can now accept a platform-provided scan closure. The worker runs on a dedicated thread/runtime, waits on the configured interval, executes the blocking WLAN call through `spawn_blocking` with a 120-second timeout, emits a `CollectorEvent` into the existing bounded event channel, and publishes `WiFiRuntimeStatus`. Configuration updates change `wifi_enabled` and `scan_interval_seconds`; shutdown is stop-aware and joins the worker before publishing `Stopped`.
+
+The desktop shell supplies `NativeWlanProvider` to this production path. Upload still goes through sequence allocation, `upload_deliveries`, `UploadDispatcher`, and `ServerWorker`; the collector has no WebSocket access.

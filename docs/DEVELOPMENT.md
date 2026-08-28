@@ -49,7 +49,7 @@ cargo test -p remote-env-core
 - `DispatcherSupervisor` owns target selection and worker lifecycle. Profile removal stops the worker and cancels its existing deliveries; URL/token changes stop, recover, and replace the worker.
 - `ServerWorker` has an independent stop-aware WebSocket loop, heartbeat, reconnect backoff, strict target ACK, in-flight recovery, and `Blocked` authentication state.
 
-Integration verification is in `crates/core/tests/phase175c.rs`. It uses temporary SQLite state and two independently bound local WebSocket listeners; tests wait on bounded predicates and stop the Runtime before returning. The Rust ignored smoke skeleton remains available for protocol experiments; the corrected endpoint was verified successfully by the standalone Python client. No credentials are stored in the repository. The full workspace gate currently passes.
+- `RuntimeSupervisor` now supports an optional platform collector callback. Windows desktop passes `NativeWlanProvider` through `start_with_collector`; scan results enter the same bounded event channel and upload pipeline as other CollectorEvents. It uses temporary SQLite state and two independently bound local WebSocket listeners; tests wait on bounded predicates and stop the Runtime before returning. The Rust ignored smoke skeleton remains available for protocol experiments; the corrected endpoint was verified successfully by the standalone Python client. No credentials are stored in the repository. The full workspace gate currently passes.
 
 ## Windows Wi-Fi manual check
 

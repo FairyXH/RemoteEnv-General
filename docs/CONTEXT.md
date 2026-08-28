@@ -6,7 +6,7 @@ Read this file, `ARCHITECTURE.md`, and `DEVELOPMENT.md` before changes. For tran
 
 ## Current state
 
-Phase 2-A implementation is partial: Windows WLAN BSS scanning, normalized observations, mock collector tests, and a manual scan example are implemented. Runtime periodic collector scheduling, full status wiring, and hardware evidence remain.
+Phase 2-A implementation is partial: Windows WLAN BSS scanning, normalized observations, mock collector tests, a manual scan example, and Runtime-owned periodic scheduling are implemented. Full Runtime integration coverage and hardware/backend evidence remain.
 
 ## Completed
 
@@ -44,9 +44,9 @@ Phase 2-A implementation is partial: Windows WLAN BSS scanning, normalized obser
 
 ## Phase 2-A status
 
-Status: Partial. Implemented `windows-sys` WLAN bindings, BSS-based snapshots, SSID/BSSID/frequency normalization, mock provider tests, and a Tauri scan command. Not implemented: periodic Runtime-owned collector task, persisted last-scan/count status, security IE parsing, and real Windows hardware test evidence.
+Status: Partial. Implemented `windows-sys` WLAN bindings, BSS-based snapshots, SSID/BSSID/frequency normalization, mock provider tests, a Tauri scan command, and Runtime-owned periodic scheduling with dynamic `wifi_enabled`/`scan_interval_seconds`, bounded blocking execution, timeout, and status propagation. Not implemented: dedicated Runtime integration fixture, persisted scan history, security IE parsing, and real backend Wi-Fi upload evidence. Real hardware probe ran with one interface but zero networks because the adapter was software-disabled; `netsh wlan show networks mode=bssid` confirmed the interface was powered down.
 
-Next step: wire a stop-aware blocking scan worker into RuntimeSupervisor and expose its truthful status snapshot.
+Next step: add deterministic Runtime mock-provider integration coverage and rerun hardware/backend tests when a WLAN interface is software-enabled.
 
 ## Phase 1.75-C status
 
