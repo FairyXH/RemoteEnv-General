@@ -72,7 +72,7 @@ function App() {
     setStatus(nextStatus); setConfig(nextConfig);
   }, []);
   React.useEffect(() => { reload().catch(() => setNotice("无法读取应用状态。")); let off: (() => void) | undefined; listen<RuntimeStatus>("runtime_status_changed", (event) => setStatus(event.payload)).then((unlisten) => { off = unlisten; }); return () => off?.(); }, [reload]);
-  React.useEffect(() => { if (status.servers.some(server => server.connection === "Blocked")) { window.alert("采集服务启动失败，服务器认证或协议被拒绝，请检查配置和日志。"); } }, [status.servers]);
+  React.useEffect(() => { const blocked = status.servers.find(server => server.connection === "Blocked"); if (blocked) { window.alert(`服务器连接被拒绝（${blocked.profile_id}）：${blocked.last_error ?? "未提供具体原因"}`); } }, [status.servers]);
   const saveOptions = async (next: Partial<Config>) => { try { const result = await invoke<Config>("set_runtime_options", { serverMode: next.server_mode ?? config.server_mode, activeServerId: next.active_server_id ?? config.active_server_id, wifiEnabled: next.wifi_enabled ?? config.wifi_enabled, bluetoothEnabled: next.bluetooth_enabled ?? config.bluetooth_enabled, scanIntervalSeconds: next.scan_interval_seconds ?? config.scan_interval_seconds, uploadIntervalSeconds: next.upload_interval_seconds ?? config.upload_interval_seconds }); setConfig(result); } catch { setNotice("保存采集服务设置失败。") } };
   const openNew = () => { setEditing(null); setDialogOpen(true); setForm({ name: "", url: "", device_id: "", token: "", enabled: true }); setShowToken(false); };
   const edit = (server: Server) => { setEditing(server); setDialogOpen(true); setForm({ name: server.name, url: server.url, device_id: server.device_id, token: "", enabled: server.enabled }); setShowToken(false); };
