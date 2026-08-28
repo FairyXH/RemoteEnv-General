@@ -17,8 +17,10 @@ struct TestServer {
     received: Arc<Mutex<Vec<Value>>>,
     ready: Arc<AtomicUsize>,
     auth_attempts: Arc<AtomicUsize>,
+    auth_frames: Arc<Mutex<Vec<Value>>>,
     ack: Arc<AtomicBool>,
     auth_failure: Arc<AtomicBool>,
+    heartbeat_count: Arc<AtomicUsize>,
     disconnect: Arc<Notify>,
     changed: Arc<Notify>,
 }
@@ -30,18 +32,22 @@ impl TestServer {
         let received = Arc::new(Mutex::new(Vec::new()));
         let ready = Arc::new(AtomicUsize::new(0));
         let auth_attempts = Arc::new(AtomicUsize::new(0));
+        let auth_frames = Arc::new(Mutex::new(Vec::new()));
         let ack = Arc::new(AtomicBool::new(true));
         let disconnect = Arc::new(Notify::new());
         let auth_failure = Arc::new(AtomicBool::new(false));
+        let heartbeat_count = Arc::new(AtomicUsize::new(0));
         let changed = Arc::new(Notify::new());
         let task_state = (
             received.clone(),
             ready.clone(),
             auth_attempts.clone(),
+            auth_frames.clone(),
             ack.clone(),
             disconnect.clone(),
             auth_failure.clone(),
             changed.clone(),
+            heartbeat_count.clone(),
         );
         tokio::spawn(async move {
             loop {
@@ -58,8 +64,11 @@ impl TestServer {
                     };
                     state.2.fetch_add(1, Ordering::SeqCst);
                     let auth: Value = serde_json::from_str(&raw).unwrap();
-                    assert_eq!(auth["type"], "auth");
-                    if state.5.load(Ordering::SeqCst) {
+                    state.3.lock().unwrap().push(auth.clone());
+                    if auth["type"] != "auth" {
+                        return;
+                    }
+                    if state.6.load(Ordering::SeqCst) {
                         let _ = socket.send(Message::Text(r#"{"type":"auth_result","success":false,"message":"invalid token"}"#.into())).await;
                         return;
                     }
@@ -74,10 +83,10 @@ impl TestServer {
                         ))
                         .await;
                     state.1.fetch_add(1, Ordering::SeqCst);
-                    state.6.notify_waiters();
+                    state.7.notify_waiters();
                     loop {
                         let message = tokio::select! {
-                            _ = state.4.notified() => {
+                            _ = state.5.notified() => {
                                 let _ = socket.close(None).await;
                                 break;
                             }
@@ -93,14 +102,15 @@ impl TestServer {
                         match value["type"].as_str() {
                             Some("environment_data") => {
                                 state.0.lock().unwrap().push(value.clone());
-                                state.6.notify_waiters();
-                                if state.3.load(Ordering::SeqCst) {
+                                state.7.notify_waiters();
+                                if state.4.load(Ordering::SeqCst) {
                                     let ack = serde_json::json!({"type":"data_result","success":true,"device_id":value["device_id"],"data_type":value["data_type"],"sequence":value["sequence"]});
                                     let _ =
                                         socket.send(Message::Text(ack.to_string().into())).await;
                                 }
                             }
                             Some("heartbeat") => {
+                                state.8.fetch_add(1, Ordering::SeqCst);
                                 let _ = socket
                                     .send(Message::Text(r#"{"type":"pong"}"#.into()))
                                     .await;
@@ -116,9 +126,11 @@ impl TestServer {
             received,
             ready,
             auth_attempts,
+            auth_frames,
             ack,
             disconnect,
             auth_failure,
+            heartbeat_count,
             changed,
         }
     }
@@ -143,6 +155,14 @@ impl TestServer {
 
     fn auth_attempt_count(&self) -> usize {
         self.auth_attempts.load(Ordering::SeqCst)
+    }
+
+    fn heartbeat_count(&self) -> usize {
+        self.heartbeat_count.load(Ordering::SeqCst)
+    }
+
+    fn auth_frames(&self) -> Vec<Value> {
+        self.auth_frames.lock().unwrap().clone()
     }
 }
 
@@ -245,6 +265,9 @@ async fn phase_175c_runtime_uses_independent_dual_servers_and_recovery() {
     wait_ready(&runtime, 2).await;
     assert_eq!(a.ready.load(Ordering::SeqCst), 1);
     assert_eq!(b.ready.load(Ordering::SeqCst), 1);
+    a.wait_for(|server| server.heartbeat_count() > 0).await;
+    assert_eq!(a.auth_frames()[0]["type"], "auth");
+    assert_eq!(b.auth_frames()[0]["type"], "auth");
 
     runtime.submit(event("one")).unwrap();
     a.wait_for(|s| s.sequences() == vec![1]).await;
