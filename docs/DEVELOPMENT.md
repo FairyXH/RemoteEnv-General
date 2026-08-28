@@ -49,5 +49,5 @@ cargo test -p remote-env-core
 - `DispatcherSupervisor` owns target selection and worker lifecycle. Profile removal stops the worker and cancels its existing deliveries; URL/token changes stop, recover, and replace the worker.
 - `ServerWorker` has an independent stop-aware WebSocket loop, heartbeat, reconnect backoff, strict target ACK, in-flight recovery, and `Blocked` authentication state.
 
-Integration verification is in `crates/core/tests/phase175c.rs`. It uses temporary SQLite state and two independently bound local WebSocket listeners; tests must wait on bounded predicates and stop the Runtime before returning. The real backend test remains ignored and must receive all credentials only through process environment variables.
+Integration verification is in `crates/core/tests/phase175c.rs`. It uses temporary SQLite state and two independently bound local WebSocket listeners; tests wait on bounded predicates and stop the Runtime before returning. The real backend test remains ignored and must receive all credentials only through process environment variables. The full workspace gate currently passes.
 
