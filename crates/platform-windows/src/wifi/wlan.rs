@@ -3,93 +3,14 @@ use super::model::{
     Security, WiFiObservation, WiFiSnapshot, band_for_frequency, channel_for_frequency,
     decode_ssid, format_bssid,
 };
-use std::ffi::c_void;
-use std::mem::size_of;
 use std::ptr::null_mut;
 use std::time::Instant;
+use windows_sys::Win32::Foundation::HANDLE;
+use windows_sys::Win32::NetworkManagement::WiFi::{
+    WLAN_BSS_LIST, WlanCloseHandle, WlanEnumInterfaces, WlanFreeMemory, WlanGetNetworkBssList,
+    WlanOpenHandle, WlanScan,
+};
 use windows_sys::core::GUID;
-
-const WLAN_MAX_PHY_TYPE_NUMBER: usize = 8;
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct InterfaceInfo {
-    guid: GUID,
-    description: [u16; 256],
-    state: u32,
-}
-
-#[repr(C)]
-struct InterfaceInfoList {
-    dw_number_of_items: u32,
-    dw_index: u32,
-    items: [InterfaceInfo; 1],
-}
-
-#[repr(C)]
-struct Ssid {
-    length: u32,
-    ssid: [u8; 32],
-}
-
-#[repr(C)]
-struct BssEntry {
-    ssid: Ssid,
-    phy_type: u32,
-    phy_index: u32,
-    bssid: [u8; 6],
-    reserved: u8,
-    rssi: i32,
-    link_quality: u32,
-    in_reg_domain: i32,
-    beacon_period: u16,
-    timestamp: u64,
-    host_timestamp: u64,
-    capability: u16,
-    channel_center_frequency: u32,
-    ie_offset: u32,
-    ie_size: u32,
-}
-
-#[repr(C)]
-struct BssList {
-    total_size: u32,
-    number_of_items: u32,
-    items: [BssEntry; 1],
-}
-
-#[link(name = "wlanapi")]
-unsafe extern "system" {
-    fn WlanOpenHandle(
-        version: u32,
-        reserved: *mut c_void,
-        negotiated: *mut u32,
-        handle: *mut *mut c_void,
-    ) -> u32;
-    fn WlanCloseHandle(handle: *mut c_void, reserved: *mut c_void) -> u32;
-    fn WlanEnumInterfaces(
-        handle: *mut c_void,
-        reserved: *mut c_void,
-        list: *mut *mut InterfaceInfoList,
-    ) -> u32;
-    fn WlanScan(
-        handle: *mut c_void,
-        interface: *const GUID,
-        ssid: *const c_void,
-        ie: *const c_void,
-        reserved: *mut c_void,
-    ) -> u32;
-    fn WlanGetNetworkBssList(
-        handle: *mut c_void,
-        interface: *const GUID,
-        ssid: *const c_void,
-        type_: u32,
-        security: i32,
-        reserved: *mut c_void,
-        list: *mut *mut BssList,
-    ) -> u32;
-    fn WlanFreeMemory(memory: *mut c_void);
-}
 
 pub struct NativeWlanProvider;
 
@@ -109,7 +30,7 @@ impl super::collector::WlanProvider for NativeWlanProvider {
     fn scan(&self) -> Result<WiFiSnapshot, WiFiError> {
         let started = Instant::now();
         unsafe {
-            let mut handle = null_mut();
+            let mut handle: HANDLE = null_mut();
             let mut negotiated = 0;
             check(WlanOpenHandle(2, null_mut(), &mut negotiated, &mut handle))?;
             let result = enumerate(handle, started);
@@ -119,26 +40,32 @@ impl super::collector::WlanProvider for NativeWlanProvider {
     }
 }
 
-unsafe fn enumerate(handle: *mut c_void, started: Instant) -> Result<WiFiSnapshot, WiFiError> {
+unsafe fn enumerate(handle: HANDLE, started: Instant) -> Result<WiFiSnapshot, WiFiError> {
     let mut interfaces = null_mut();
     check(WlanEnumInterfaces(handle, null_mut(), &mut interfaces))?;
     if interfaces.is_null() {
         return Err(WiFiError::InvalidData("null interface list".into()));
     }
     let list = &*interfaces;
-    let count = list.dw_number_of_items as usize;
-    let base = list.items.as_ptr();
+    let count = list.dwNumberOfItems as usize;
+    let base = list.InterfaceInfo.as_ptr();
     let mut networks = Vec::new();
     for index in 0..count {
         let interface = &*base.add(index);
         // A scan request is asynchronous; the BSS list below represents the driver's current results.
-        let _ = WlanScan(handle, &interface.guid, null_mut(), null_mut(), null_mut());
-        let mut bss = null_mut();
+        let _ = WlanScan(
+            handle,
+            &interface.InterfaceGuid,
+            null_mut(),
+            null_mut(),
+            null_mut(),
+        );
+        let mut bss: *mut WLAN_BSS_LIST = null_mut();
         let status = WlanGetNetworkBssList(
             handle,
-            &interface.guid,
+            &interface.InterfaceGuid,
             null_mut(),
-            0,
+            3,
             0,
             null_mut(),
             &mut bss,
@@ -147,25 +74,25 @@ unsafe fn enumerate(handle: *mut c_void, started: Instant) -> Result<WiFiSnapsho
             continue;
         }
         let entries = &*bss;
-        let entry_base = entries.items.as_ptr();
-        let interface_id = format_guid(&interface.guid);
-        for item in 0..entries.number_of_items as usize {
+        let entry_base = entries.wlanBssEntries.as_ptr();
+        let interface_id = format_guid(&interface.InterfaceGuid);
+        for item in 0..entries.dwNumberOfItems as usize {
             let entry = &*entry_base.add(item);
-            let length = (entry.ssid.length as usize).min(entry.ssid.ssid.len());
-            let (ssid, raw, hidden) = decode_ssid(&entry.ssid.ssid[..length]);
-            let frequency = (entry.channel_center_frequency > 0)
-                .then_some(entry.channel_center_frequency / 1000);
+            let length = (entry.dot11Ssid.uSSIDLength as usize).min(entry.dot11Ssid.ucSSID.len());
+            let (ssid, raw, hidden) = decode_ssid(&entry.dot11Ssid.ucSSID[..length]);
+            let frequency =
+                (entry.ulChCenterFrequency > 0).then_some(entry.ulChCenterFrequency / 1000);
             networks.push(WiFiObservation {
                 ssid,
                 ssid_bytes_hex: raw,
                 hidden,
-                bssid: format_bssid(&entry.bssid),
-                signal_strength_dbm: Some(entry.rssi),
-                signal_percent: Some(entry.link_quality.min(100) as u8),
+                bssid: format_bssid(&entry.dot11Bssid),
+                signal_strength_dbm: Some(entry.lRssi),
+                signal_percent: Some(entry.uLinkQuality.min(100) as u8),
                 channel: frequency.and_then(channel_for_frequency),
                 frequency_mhz: frequency,
                 band: band_for_frequency(frequency),
-                phy_type: Some(format!("{}", entry.phy_type)),
+                phy_type: Some(format!("{}", entry.dot11BssPhyType)),
                 network_type: None,
                 security: Security::default(),
                 interface_id: interface_id.clone(),
@@ -197,6 +124,3 @@ fn format_guid(guid: &GUID) -> String {
         guid.data1, guid.data2, guid.data3, guid.data4
     )
 }
-
-#[allow(dead_code)]
-const _: usize = WLAN_MAX_PHY_TYPE_NUMBER + size_of::<Ssid>();
