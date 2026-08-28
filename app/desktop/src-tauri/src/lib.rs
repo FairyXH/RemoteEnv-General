@@ -2,7 +2,7 @@ use remote_env_core::collector::CollectorEvent;
 
 use remote_env_core::runtime::{RuntimeError, RuntimeStatus, RuntimeSupervisor};
 use remote_env_core::state::StateStore;
-use remote_env_platform_windows::wifi::{NativeWlanProvider, WiFiCollector};
+use remote_env_platform_windows::wifi::{NativeWlanProvider, WiFiCollector, WlanProvider};
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{Manager, State};
@@ -75,8 +75,29 @@ fn start_runtime(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<()
     if config.token.is_empty() && config.server_profiles.is_empty() {
         return Err("configure server URL and token before starting runtime".into());
     }
-    *guard =
-        Some(RuntimeSupervisor::start(config, store).map_err(|e: RuntimeError| e.to_string())?);
+    *guard = Some(
+        RuntimeSupervisor::start_with_collector(
+            config,
+            store,
+            Some(std::sync::Arc::new(|| {
+                NativeWlanProvider::new()
+                    .scan()
+                    .and_then(|snapshot| {
+                        Ok(remote_env_core::collector::CollectorEvent {
+                            data_type: "wifi".into(),
+                            timestamp_ms: 0,
+                            data: serde_json::to_value(snapshot).map_err(|error| {
+                                remote_env_platform_windows::wifi::WiFiError::InvalidData(
+                                    error.to_string(),
+                                )
+                            })?,
+                        })
+                    })
+                    .map_err(|error| error.to_string())
+            })),
+        )
+        .map_err(|e: RuntimeError| e.to_string())?,
+    );
     Ok(())
 }
 
