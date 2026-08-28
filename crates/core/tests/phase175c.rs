@@ -245,6 +245,28 @@ async fn wait_for_profiles(runtime: &RuntimeSupervisor, expected: &[&str]) {
     .unwrap();
 }
 
+async fn wait_delivery_status(
+    store: &StateStore,
+    target_id: &str,
+    device_id: &str,
+    data_type: &str,
+    sequence: u64,
+    expected: &str,
+) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while store
+            .delivery_status(target_id, device_id, data_type, sequence)
+            .unwrap()
+            .as_deref()
+            != Some(expected)
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
 #[tokio::test]
 async fn phase_175c_runtime_uses_independent_dual_servers_and_recovery() {
     let a = TestServer::start().await;
@@ -279,6 +301,14 @@ async fn phase_175c_runtime_uses_independent_dual_servers_and_recovery() {
     runtime.submit(event("recovery")).unwrap();
     a.wait_for(|s| s.sequences().contains(&2)).await;
     b.wait_for(|s| s.sequences().contains(&2)).await;
+    wait_delivery_status(&store, "b", "test-device", "wifi", 2, "completed").await;
+    assert_eq!(
+        store
+            .delivery_status("a", "test-device", "wifi", 2)
+            .unwrap()
+            .as_deref(),
+        Some("in_flight")
+    );
     a.disconnect.notify_one();
     a.ack.store(true, Ordering::SeqCst);
     a.wait_for(|s| s.ready.load(Ordering::SeqCst) >= 2).await;
@@ -347,5 +377,35 @@ async fn phase_175c_auth_failure_becomes_blocked_without_retry() {
     let attempts = a.auth_attempt_count();
     tokio::time::sleep(Duration::from_millis(1500)).await;
     assert_eq!(a.auth_attempt_count(), attempts);
+    runtime.stop();
+}
+
+#[tokio::test]
+async fn phase_175c_profile_removal_cancels_target_delivery() {
+    let a = TestServer::start().await;
+    let b = TestServer::start().await;
+    let dir = tempdir().unwrap();
+    let store = StateStore::open(dir.path().join("state.sqlite3")).unwrap();
+    let identity = DeviceIdentity {
+        device_id: "delete-device".into(),
+        device_name: "fixture".into(),
+        platform: "test".into(),
+        platform_version: "1".into(),
+        client_version: "1".into(),
+        hardware: None,
+    };
+    let mut multi = config(identity, &a, &b);
+    multi.server_mode = ServerMode::Multi;
+    let mut runtime = RuntimeSupervisor::start(multi.clone(), store.clone()).unwrap();
+    wait_ready(&runtime, 2).await;
+    a.ack.store(false, Ordering::SeqCst);
+    runtime.submit(event("delete")).unwrap();
+    a.wait_for(|server| server.sequences().contains(&1)).await;
+    let mut single = multi;
+    single.server_mode = ServerMode::Single;
+    single.active_server_id = Some("b".into());
+    runtime.update_config(single).unwrap();
+    wait_for_profiles(&runtime, &["b"]).await;
+    wait_delivery_status(&store, "a", "delete-device", "wifi", 1, "cancelled").await;
     runtime.stop();
 }
