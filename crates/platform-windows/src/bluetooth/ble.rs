@@ -1,16 +1,44 @@
 use super::error::BluetoothError;
-use remote_env_core::bluetooth::{BluetoothObservation, ManufacturerData, ServiceData};
+use super::model::format_bluetooth_address;
+use remote_env_core::bluetooth::{BluetoothObservation, BluetoothTransport};
+use std::sync::mpsc::sync_channel;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use windows::Devices::Bluetooth::Advertisement::{
+    BluetoothLEAdvertisementReceivedEventArgs, BluetoothLEAdvertisementWatcher,
+    BluetoothLEScanningMode,
+};
+use windows::Foundation::TypedEventHandler;
+use windows::Storage::Streams::DataReader;
+use windows::core::GUID;
 
 #[derive(Debug, Default, Clone)]
 pub struct BleAdvertisement {
     pub name: Option<String>,
     pub rssi: Option<i16>,
     pub service_uuids: Vec<String>,
-    pub manufacturer_data: Vec<ManufacturerData>,
-    pub service_data: Vec<ServiceData>,
+    pub manufacturer_data: Vec<remote_env_core::bluetooth::ManufacturerData>,
+    pub service_data: Vec<remote_env_core::bluetooth::ServiceData>,
     pub connectable: Option<bool>,
     pub appearance: Option<u16>,
     pub tx_power: Option<i16>,
+}
+
+fn read_buffer(buffer: windows::Storage::Streams::IBuffer) -> windows::core::Result<Vec<u8>> {
+    let reader = DataReader::FromBuffer(&buffer)?;
+    let mut bytes = vec![0u8; reader.UnconsumedBufferLength()? as usize];
+    reader.ReadBytes(&mut bytes)?;
+    Ok(bytes)
+}
+fn guid_string(guid: GUID) -> String {
+    let hex = format!("{:032X}", guid.to_u128());
+    format!(
+        "{}-{}-{}-{}-{}",
+        &hex[0..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..32]
+    )
 }
 
 pub fn parse_advertisement(raw: &[u8]) -> BleAdvertisement {
@@ -30,14 +58,22 @@ pub fn parse_advertisement(raw: &[u8]) -> BleAdvertisement {
         match ad_type {
             0x08 | 0x09 => result.name = String::from_utf8(data.to_vec()).ok(),
             0x0A => result.tx_power = data.first().map(|value| *value as i8 as i16),
-            0x16 if data.len() >= 2 => result.service_data.push(ServiceData {
-                uuid: format!("{:02X}{:02X}", data[1], data[0]),
-                data: data[2..].to_vec(),
-            }),
-            0xFF if data.len() >= 2 => result.manufacturer_data.push(ManufacturerData {
-                company_id: u16::from_le_bytes([data[0], data[1]]),
-                data: data[2..].to_vec(),
-            }),
+            0x16 if data.len() >= 2 => {
+                result
+                    .service_data
+                    .push(remote_env_core::bluetooth::ServiceData {
+                        uuid: format!("{:02X}{:02X}", data[1], data[0]),
+                        data: data[2..].to_vec(),
+                    })
+            }
+            0xFF if data.len() >= 2 => {
+                result
+                    .manufacturer_data
+                    .push(remote_env_core::bluetooth::ManufacturerData {
+                        company_id: u16::from_le_bytes([data[0], data[1]]),
+                        data: data[2..].to_vec(),
+                    })
+            }
             0x19 if data.len() >= 2 => {
                 result.appearance = Some(u16::from_le_bytes([data[0], data[1]]))
             }
@@ -62,10 +98,14 @@ pub trait BleScanner: Send + Sync {
         true
     }
 }
-pub struct NativeBleScanner;
+pub struct NativeBleScanner {
+    scan_window: Duration,
+}
 impl NativeBleScanner {
     pub fn new() -> Self {
-        Self
+        Self {
+            scan_window: Duration::from_secs(3),
+        }
     }
 }
 impl Default for NativeBleScanner {
@@ -75,12 +115,89 @@ impl Default for NativeBleScanner {
 }
 impl BleScanner for NativeBleScanner {
     fn scan(&self) -> Result<Vec<BluetoothObservation>, BluetoothError> {
-        Err(BluetoothError::Unavailable(
-            "WinRT advertisement watcher unavailable in this build".into(),
-        ))
+        let (tx, rx) = sync_channel(256);
+        let watcher = BluetoothLEAdvertisementWatcher::new()
+            .map_err(|e| BluetoothError::Unavailable(e.to_string()))?;
+        watcher
+            .SetScanningMode(BluetoothLEScanningMode::Active)
+            .map_err(|e| BluetoothError::Unavailable(e.to_string()))?;
+        let callback = TypedEventHandler::<
+            BluetoothLEAdvertisementWatcher,
+            BluetoothLEAdvertisementReceivedEventArgs,
+        >::new(move |_sender, args| {
+            let Some(args) = args.as_ref() else {
+                return Ok(());
+            };
+            let advertisement = args.Advertisement()?;
+            let mut service_uuids = Vec::new();
+            if let Ok(values) = advertisement.ServiceUuids() {
+                for index in 0..values.Size()? {
+                    if let Ok(guid) = values.GetAt(index) {
+                        service_uuids.push(guid_string(guid));
+                    }
+                }
+            }
+            let mut manufacturer_data = Vec::new();
+            if let Ok(values) = advertisement.ManufacturerData() {
+                for index in 0..values.Size()? {
+                    if let Ok(value) = values.GetAt(index) {
+                        if let Ok(company_id) = value.CompanyId() {
+                            let data = value
+                                .Data()
+                                .ok()
+                                .and_then(|buffer| read_buffer(buffer).ok())
+                                .unwrap_or_default();
+                            manufacturer_data.push(remote_env_core::bluetooth::ManufacturerData {
+                                company_id,
+                                data,
+                            });
+                        }
+                    }
+                }
+            }
+            let event = BluetoothObservation {
+                address: format_bluetooth_address(args.BluetoothAddress()?),
+                transport: BluetoothTransport::Ble,
+                name: advertisement
+                    .LocalName()
+                    .ok()
+                    .map(|value| value.to_string_lossy())
+                    .filter(|value| !value.is_empty()),
+                rssi: args.RawSignalStrengthInDBm().ok(),
+                service_uuids,
+                manufacturer_data,
+                service_data: Vec::new(),
+                connectable: args.IsConnectable().ok(),
+                class_of_device: None,
+                appearance: None,
+                tx_power: args
+                    .TransmitPowerLevelInDBm()
+                    .ok()
+                    .and_then(|value| value.Value().ok()),
+                timestamp_ms: SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as i64,
+            };
+            let _ = tx.try_send(event);
+            Ok(())
+        });
+        let token = watcher
+            .Received(&callback)
+            .map_err(|e| BluetoothError::Unavailable(e.to_string()))?;
+        watcher
+            .Start()
+            .map_err(|e| BluetoothError::Unavailable(e.to_string()))?;
+        std::thread::sleep(self.scan_window);
+        let stop_result = watcher.Stop();
+        let remove_result = watcher.RemoveReceived(token);
+        stop_result
+            .and(remove_result)
+            .map_err(|e| BluetoothError::Unavailable(e.to_string()))?;
+        Ok(rx.try_iter().collect())
     }
     fn available(&self) -> bool {
-        false
+        true
     }
 }
 

@@ -19,4 +19,5 @@ windows-sys = { version = "0.59", features = [
 windows = { version = "0.61", features = [
     "Devices_Bluetooth_Advertisement",
     "Foundation",
+    "Storage_Streams",
 ] }
