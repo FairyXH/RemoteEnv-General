@@ -1,7 +1,9 @@
 use crate::config::{DeviceIdentity, ServerProfile};
 use crate::dispatcher::UploadDispatcher;
 use crate::protocol::{Ack, AuthFrame, HeartbeatFrame};
-use crate::transport::{Backoff, ConnectionState, ServerEvent, classify_server_message};
+use crate::transport::{
+    Backoff, ConnectionState, HeartbeatMonitor, ServerEvent, classify_server_message,
+};
 use futures_util::{SinkExt, StreamExt};
 use serde::Serialize;
 use serde_json::Value;
@@ -111,6 +113,7 @@ pub struct ServerWorker {
     status_tx: watch::Sender<ServerWorkerStatus>,
     status: ServerWorkerStatus,
     heartbeat_interval: Duration,
+    heartbeat_monitor: HeartbeatMonitor,
 }
 
 impl ServerWorker {
@@ -129,6 +132,10 @@ impl ServerWorker {
             status_tx,
             status,
             heartbeat_interval,
+            heartbeat_monitor: HeartbeatMonitor::new(
+                heartbeat_interval,
+                heartbeat_interval.saturating_mul(3),
+            ),
         }
     }
 
@@ -205,6 +212,7 @@ impl ServerWorker {
             ));
         }
         self.publish(ConnectionState::Ready);
+        self.heartbeat_monitor.mark_pong();
         let mut heartbeat = tokio::time::interval(self.heartbeat_interval);
         let mut in_flight = None;
         loop {
@@ -225,6 +233,9 @@ impl ServerWorker {
             tokio::select! {
                 _ = &mut *stop => return Err(WorkerError::Stopped),
                 _ = heartbeat.tick() => {
+                    if self.heartbeat_monitor.is_timed_out() {
+                        return Err(WorkerError::Transport);
+                    }
                     let frame = HeartbeatFrame { r#type: "heartbeat".into(), timestamp: now_ms() };
                     socket.send(Message::Text(serde_json::to_string(&frame).map_err(|_| WorkerError::Protocol)?.into())).await.map_err(|_| WorkerError::Transport)?;
                 }
@@ -232,7 +243,7 @@ impl ServerWorker {
                     let Some(message) = message else { return Err(WorkerError::Transport); };
                     let value = serde_json::from_str::<Value>(message.map_err(|_| WorkerError::Transport)?.to_text().map_err(|_| WorkerError::Protocol)?).map_err(|_| WorkerError::Protocol)?;
                     match classify_server_message(value["type"].as_str().unwrap_or_default(), value["code"].as_str()) {
-                        ServerEvent::Pong => {},
+                        ServerEvent::Pong => self.heartbeat_monitor.mark_pong(),
                         ServerEvent::Ack => {
                             let Some((id, envelope)) = in_flight.take() else { continue; };
                             let ack: Ack = serde_json::from_value(value).map_err(|_| WorkerError::Protocol)?;
