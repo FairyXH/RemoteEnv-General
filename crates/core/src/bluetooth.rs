@@ -2,13 +2,23 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Ord, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum BluetoothTransport { Ble, Classic, Dual }
+pub enum BluetoothTransport {
+    Ble,
+    Classic,
+    Dual,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ManufacturerData { pub company_id: u16, pub data: Vec<u8> }
+pub struct ManufacturerData {
+    pub company_id: u16,
+    pub data: Vec<u8>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ServiceData { pub uuid: String, pub data: Vec<u8> }
+pub struct ServiceData {
+    pub uuid: String,
+    pub data: Vec<u8>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BluetoothObservation {

@@ -1,5 +1,5 @@
-pub mod wifi;
 pub mod bluetooth;
+pub mod wifi;
 
 use remote_env_core::collector::{CapabilityState, CollectorKind};
 

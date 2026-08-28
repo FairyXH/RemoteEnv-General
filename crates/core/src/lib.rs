@@ -1,5 +1,5 @@
-pub mod collector;
 pub mod bluetooth;
+pub mod collector;
 pub mod config;
 pub mod dispatcher;
 pub mod protocol;
