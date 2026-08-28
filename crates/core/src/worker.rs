@@ -285,15 +285,7 @@ impl ServerWorker {
                             self.status.uploaded = self.status.uploaded.saturating_add(1);
                             self.refresh_counts();
                         }
-                        ServerEvent::Invalid => return Err(WorkerError::Blocked(format!("服务器返回未知协议消息: {}", value))),
-                        ServerEvent::SequenceRejected => {
-                            if let Some((id, _)) = in_flight.take() {
-                                self.dispatcher.complete_delivery(&self.profile.id, id)?;
-                                self.status.last_error = Some(format!("服务器判定该序号已存在或不是最新，已确认本地投递: {}", value));
-                                self.refresh_counts();
-                            }
-                        }
-                        ServerEvent::SequenceRejected | ServerEvent::FatalError if value["code"] == "unknown_device" => {
+                        ServerEvent::FatalError if value["code"] == "unknown_device" => {
                             if let Some((id, envelope)) = in_flight.take() {
                                 self.dispatcher.block(&self.profile.id, id)?;
                                 self.status.last_error = Some(format!("服务器拒绝数据设备身份: profile_id={}, auth_device_id={}, envelope_device_id={}, response={}", self.profile.id, self.identity.device_id, envelope.device_id, value));
@@ -302,7 +294,16 @@ impl ServerWorker {
                             }
                             return Err(WorkerError::Blocked(format!("服务器拒绝设备身份: {}", value)));
                         }
-                        ServerEvent::SequenceRejected | ServerEvent::FatalError => {
+                        ServerEvent::SequenceRejected => {
+                            if let Some((_id, envelope)) = in_flight.take() {
+                                let next = envelope.sequence.saturating_add(1);
+                                self.dispatcher.rebase_target_sequences(&self.profile.id, &envelope.device_id, &envelope.data_type, next)?;
+                                self.status.last_error = Some(format!("服务器拒绝旧序号，已重置本地序号基线并准备重传: {}", value));
+                                self.refresh_counts();
+                            }
+                        }
+                        ServerEvent::Invalid => return Err(WorkerError::Blocked(format!("服务器返回未知协议消息: {}", value))),
+                        ServerEvent::FatalError => {
                             if let Some((id, _)) = in_flight.take() { self.dispatcher.block(&self.profile.id, id)?; }
                             return Err(WorkerError::Blocked(format!("服务器拒绝连接/上传: {}", value)));
                         }

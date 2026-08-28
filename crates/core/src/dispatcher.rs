@@ -192,6 +192,10 @@ impl UploadDispatcher {
         Ok(self.store.unblock_target(target_id)?)
     }
 
+    pub fn rebase_target_sequences(&self, target_id: &str, device_id: &str, data_type: &str, minimum: u64) -> Result<(), DispatcherError> {
+        Ok(self.store.rebase_target_sequences(target_id, device_id, data_type, minimum)?)
+    }
+
     pub fn recover(&self, server_id: &str) -> Result<(), DispatcherError> {
         Ok(self.store.recover_target(server_id)?)
     }

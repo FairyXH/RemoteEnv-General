@@ -107,6 +107,24 @@ impl StateStore {
         Ok(latest as u64)
     }
 
+    pub fn rebase_target_sequences(&self, target_id: &str, device_id: &str, data_type: &str, minimum: u64) -> Result<(), StateError> {
+        let c = self.lock()?;
+        let mut stmt = c.prepare("SELECT id,envelope_json FROM upload_deliveries WHERE target_id=?1 AND status IN ('pending','in_flight','blocked')")?;
+        let rows = stmt.query_map(params![target_id], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?.collect::<Result<Vec<_>, _>>()?;
+        drop(stmt);
+        let mut next = minimum;
+        for (id, raw) in rows {
+            let mut envelope: EnvironmentEnvelope = serde_json::from_str(&raw)?;
+            if envelope.device_id == device_id && envelope.data_type == data_type && envelope.sequence < next {
+                envelope.sequence = next;
+                next = next.saturating_add(1);
+                c.execute("UPDATE upload_deliveries SET status='pending', envelope_json=?1 WHERE target_id=?2 AND id=?3", params![serde_json::to_string(&envelope)?, target_id, id])?;
+            }
+        }
+        c.execute("INSERT INTO sequences(device_id,data_type,value) VALUES(?1,?2,?3) ON CONFLICT(device_id,data_type) DO UPDATE SET value=MAX(value, excluded.value)", params![device_id, data_type, next as i64])?;
+        Ok(())
+    }
+
     pub fn load_or_create_identity(
         &self,
         name: &str,

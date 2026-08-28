@@ -422,10 +422,11 @@ fn set_server_enabled(
     state: State<'_, AppState>,
 ) -> Result<RuntimeStatus, String> {
     let (store, mut config) = load_config(&state.state_path)?;
-    let Some(profile) = config.server_profiles.iter_mut().find(|profile| profile.id == id) else {
+    if let Some(profile) = config.server_profiles.iter_mut().find(|profile| profile.id == id) {
+        profile.enabled = enabled;
+    } else {
         return Err("未找到服务器配置。".into());
-    };
-    profile.enabled = enabled;
+    }
     if enabled && config.server_mode == ServerMode::Single {
         config.active_server_id = Some(id.clone());
     }
