@@ -15,6 +15,8 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 pub struct ServerWorkerStatus {
     pub profile_id: String,
     pub connection: ConnectionState,
+    pub heartbeat_alive: bool,
+    pub last_heartbeat_ms: Option<i64>,
     pub pending: usize,
     pub in_flight: usize,
     pub blocked: usize,
@@ -27,6 +29,8 @@ impl ServerWorkerStatus {
         Self {
             profile_id,
             connection: ConnectionState::Stopped,
+            heartbeat_alive: false,
+            last_heartbeat_ms: None,
             pending: 0,
             in_flight: 0,
             blocked: 0,
@@ -213,6 +217,7 @@ impl ServerWorker {
         }
         self.publish(ConnectionState::Ready);
         self.heartbeat_monitor.mark_pong();
+        self.mark_heartbeat();
         let mut heartbeat = tokio::time::interval(self.heartbeat_interval);
         let mut in_flight = None;
         loop {
@@ -243,7 +248,7 @@ impl ServerWorker {
                     let Some(message) = message else { return Err(WorkerError::Transport); };
                     let value = serde_json::from_str::<Value>(message.map_err(|_| WorkerError::Transport)?.to_text().map_err(|_| WorkerError::Protocol)?).map_err(|_| WorkerError::Protocol)?;
                     match classify_server_message(value["type"].as_str().unwrap_or_default(), value["code"].as_str()) {
-                        ServerEvent::Pong => self.heartbeat_monitor.mark_pong(),
+                        ServerEvent::Pong => { self.heartbeat_monitor.mark_pong(); self.mark_heartbeat(); }
                         ServerEvent::Ack => {
                             let Some((id, envelope)) = in_flight.take() else { continue; };
                             let ack: Ack = serde_json::from_value(value).map_err(|_| WorkerError::Protocol)?;
@@ -263,8 +268,18 @@ impl ServerWorker {
         }
     }
 
+    fn mark_heartbeat(&mut self) {
+        self.status.heartbeat_alive = true;
+        self.status.last_heartbeat_ms = Some(now_ms());
+        let _ = self.status_tx.send(self.status.clone());
+    }
+
     fn publish(&mut self, connection: ConnectionState) {
         self.status.connection = connection;
+        self.status.heartbeat_alive = connection == ConnectionState::Ready;
+        if connection != ConnectionState::Ready {
+            self.status.last_heartbeat_ms = None;
+        }
         self.refresh_counts();
         let _ = self.status_tx.send(self.status.clone());
     }

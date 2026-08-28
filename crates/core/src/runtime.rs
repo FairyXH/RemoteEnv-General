@@ -410,7 +410,14 @@ impl RuntimeSupervisor {
                             _ = status_tick.tick() => {
                                 let servers = supervisor.statuses();
                                 let mut snapshot = RuntimeStatus::default();
-                                snapshot.connection = if servers.iter().any(|s| s.connection == ConnectionState::Ready) { ConnectionState::Ready } else { ConnectionState::Reconnecting };
+                                snapshot.connection = servers
+                                    .iter()
+                                    .find(|s| s.connection == ConnectionState::Ready)
+                                    .map(|s| s.connection)
+                                    .or_else(|| servers.iter().find(|s| s.connection == ConnectionState::Authenticating).map(|s| s.connection))
+                                    .or_else(|| servers.iter().find(|s| s.connection == ConnectionState::Connecting).map(|s| s.connection))
+                                    .or_else(|| servers.iter().find(|s| s.connection == ConnectionState::Reconnecting).map(|s| s.connection))
+                                    .unwrap_or(ConnectionState::Stopped);
                                 snapshot.servers = servers;
                                 snapshot.pending = snapshot.servers.iter().map(|s| s.pending).sum();
                                 snapshot.in_flight = snapshot.servers.iter().map(|s| s.in_flight).sum();

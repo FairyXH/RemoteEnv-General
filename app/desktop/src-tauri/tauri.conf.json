@@ -4,13 +4,13 @@
   "version": "0.2.0",
   "identifier": "com.remoteenv.collector",
   "build": {
-    "beforeDevCommand": "npm --prefix ../../ui run dev",
+    "beforeDevCommand": "npm --prefix ../ui run dev",
     "beforeBuildCommand": "npm --prefix ../ui run build",
     "devUrl": "http://localhost:1420",
     "frontendDist": "../../ui/dist"
   },
   "app": {
-    "windows": [{ "title": "远程环境采集器", "width": 980, "height": 720, "minWidth": 760, "minHeight": 560, "resizable": true }],
+    "windows": [{ "label": "main", "title": "远程环境采集器", "width": 980, "height": 720, "minWidth": 760, "minHeight": 560, "resizable": true, "visible": true }],
     "security": { "csp": "default-src 'self'; connect-src 'self' ws: wss:; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'" }
   },
   "bundle": {

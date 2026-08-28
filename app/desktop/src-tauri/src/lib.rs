@@ -445,25 +445,33 @@ fn connect_server_profile(
 }
 
 #[tauri::command]
-fn scan_wifi_now() -> Result<CollectorEvent, String> {
-    let snapshot = NativeWlanProvider::new()
-        .scan()
-        .map_err(|error| error.to_string())?;
-    Ok(CollectorEvent {
-        data_type: "wifi".into(),
-        timestamp_ms: 0,
-        data: serde_json::to_value(snapshot).map_err(|error| error.to_string())?,
+async fn scan_wifi_now() -> Result<CollectorEvent, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let snapshot = NativeWlanProvider::new()
+            .scan()
+            .map_err(|error| error.to_string())?;
+        Ok(CollectorEvent {
+            data_type: "wifi".into(),
+            timestamp_ms: 0,
+            data: serde_json::to_value(snapshot).map_err(|error| error.to_string())?,
+        })
     })
+    .await
+    .map_err(|_| "Wi-Fi 扫描任务异常终止。".to_string())?
 }
 
 #[tauri::command]
-fn scan_bluetooth_now() -> Result<CollectorEvent, String> {
-    BluetoothCollector::new(
-        NativeBleScanner::new(),
-        NativeClassicBluetoothScanner::new(),
-    )
-    .scan_once()
-    .map_err(|error| error.to_string())
+async fn scan_bluetooth_now() -> Result<CollectorEvent, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        BluetoothCollector::new(
+            NativeBleScanner::new(),
+            NativeClassicBluetoothScanner::new(),
+        )
+        .scan_once()
+        .map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|_| "蓝牙扫描任务异常终止。".to_string())?
 }
 
 #[tauri::command]
