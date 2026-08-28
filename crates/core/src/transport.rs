@@ -3,6 +3,7 @@ use crate::protocol::{Ack, AuthFrame, EnvironmentEnvelope, HeartbeatFrame};
 use crate::queue::{QueueError, QueuedEnvelope, UploadQueue};
 use crate::state::StateError;
 use futures_util::{SinkExt, StreamExt};
+use serde::{Serialize, Serializer};
 use serde_json::Value;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
@@ -102,68 +103,86 @@ impl WebSocketManager {
                 "device_list required after auth_result".into(),
             ));
         }
-        while let Some(item) = queue.claim_next()? {
-            socket
-                .send(Message::Text(serde_json::to_string(&item.envelope)?.into()))
-                .await?;
-            if let Some(message) = socket.next().await {
-                let value: Value = serde_json::from_str(message?.to_text()?)?;
-                match classify_server_message(
-                    value["type"].as_str().unwrap_or_default(),
-                    value["code"].as_str(),
-                ) {
-                    ServerEvent::Ack => {
-                        let ack = serde_json::from_value(value)?;
-                        if crate::protocol::matches_ack(&ack, &item.envelope) {
-                            queue.acknowledge(&item)?;
-                        } else {
-                            return Err(WebSocketError::Authentication(
-                                "ACK does not match in-flight envelope".into(),
-                            ));
+        let mut heartbeat_tick = tokio::time::interval(self.heartbeat.interval());
+        heartbeat_tick.tick().await;
+        loop {
+            if let Some(item) = queue.claim_next()? {
+                socket
+                    .send(Message::Text(serde_json::to_string(&item.envelope)?.into()))
+                    .await?;
+                let ack_result = tokio::time::timeout(self.heartbeat.interval(), async {
+                    loop {
+                        let message = socket.next().await.ok_or_else(|| {
+                            WebSocketError::Authentication(
+                                "connection closed while uploading".into(),
+                            )
+                        })??;
+                        let value: Value = serde_json::from_str(message.to_text()?)?;
+                        match classify_server_message(
+                            value["type"].as_str().unwrap_or_default(),
+                            value["code"].as_str(),
+                        ) {
+                            ServerEvent::Ack => {
+                                let ack = serde_json::from_value(value)?;
+                                if crate::protocol::matches_ack(&ack, &item.envelope) {
+                                    break Ok(());
+                                }
+                                return Err(WebSocketError::Authentication(
+                                    "ACK does not match in-flight envelope".into(),
+                                ));
+                            }
+                            ServerEvent::SequenceRejected => {
+                                queue.block(&item)?;
+                                return Err(WebSocketError::SequenceRejected(
+                                    value["message"].as_str().unwrap_or_default().into(),
+                                ));
+                            }
+                            ServerEvent::RetryableError => {
+                                return Err(WebSocketError::Authentication(
+                                    "upload rate limited".into(),
+                                ));
+                            }
+                            ServerEvent::FatalError => {
+                                queue.block(&item)?;
+                                return Err(WebSocketError::Authentication(
+                                    value["message"].as_str().unwrap_or_default().into(),
+                                ));
+                            }
+                            ServerEvent::Pong => self.heartbeat.mark_pong(),
+                            _ => {}
                         }
                     }
-                    ServerEvent::SequenceRejected => {
-                        queue.block(&item)?;
-                        return Err(WebSocketError::SequenceRejected(
-                            value["message"].as_str().unwrap_or_default().into(),
-                        ));
+                })
+                .await
+                .map_err(|_| WebSocketError::Authentication("ACK timeout".into()))?;
+                ack_result?;
+                queue.acknowledge(&item)?;
+                continue;
+            }
+
+            tokio::select! {
+                _ = heartbeat_tick.tick() => {
+                    let heartbeat = HeartbeatFrame { r#type: "heartbeat".into(), timestamp: now_ms() };
+                    socket.send(Message::Text(serde_json::to_string(&heartbeat)?.into())).await?;
+                    let pong = tokio::time::timeout(self.heartbeat.interval(), socket.next()).await
+                        .map_err(|_| WebSocketError::Authentication("heartbeat timeout".into()))?
+                        .ok_or_else(|| WebSocketError::Authentication("connection closed during heartbeat".into()))??;
+                    let value: Value = serde_json::from_str(pong.to_text()?)?;
+                    if classify_server_message(value["type"].as_str().unwrap_or_default(), None) == ServerEvent::Pong {
+                        self.heartbeat.mark_pong();
                     }
-                    ServerEvent::RetryableError => {
-                        return Err(WebSocketError::Authentication("upload rate limited".into()));
-                    }
-                    ServerEvent::FatalError => {
-                        queue.block(&item)?;
-                        return Err(WebSocketError::Authentication(
-                            value["message"].as_str().unwrap_or_default().into(),
-                        ));
-                    }
-                    _ => {}
                 }
-            } else {
-                return Err(WebSocketError::Authentication(
-                    "connection closed while uploading".into(),
-                ));
+                message = socket.next() => {
+                    let Some(message) = message else {
+                        return Err(WebSocketError::Authentication("connection closed".into()));
+                    };
+                    let value: Value = serde_json::from_str(message?.to_text()?)?;
+                    if classify_server_message(value["type"].as_str().unwrap_or_default(), value["code"].as_str()) == ServerEvent::FatalError {
+                        return Err(WebSocketError::Authentication(value["message"].as_str().unwrap_or_default().into()));
+                    }
+                }
             }
         }
-        let heartbeat = HeartbeatFrame {
-            r#type: "heartbeat".into(),
-            timestamp: now_ms(),
-        };
-        socket
-            .send(Message::Text(serde_json::to_string(&heartbeat)?.into()))
-            .await?;
-        if let Some(message) = socket.next().await {
-            let value: Value = serde_json::from_str(message?.to_text()?)?;
-            if classify_server_message(value["type"].as_str().unwrap_or_default(), None)
-                == ServerEvent::Pong
-            {
-                self.heartbeat.mark_pong();
-            }
-        }
-        if self.heartbeat.is_timed_out() {
-            return Err(WebSocketError::Authentication("heartbeat timeout".into()));
-        }
-        Ok(())
     }
 
     pub fn next_reconnect_delay(&mut self) -> Duration {
@@ -195,6 +214,15 @@ pub enum ConnectionState {
 impl std::fmt::Display for ConnectionState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:?}", self)
+    }
+}
+
+impl Serialize for ConnectionState {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.to_string())
     }
 }
 

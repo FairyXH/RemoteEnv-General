@@ -2,11 +2,12 @@
 
 ## Unreleased
 
-### Phase 1
+### Phase 1.5
 
-- Added SQLite-backed configuration, stable identity, durable per-data-type sequences, bounded persistent upload queue, ACK matching, heartbeat monitoring, explicit connection states, and capped infinite reconnect backoff.
-- Added Core tests for persistence, queue recovery, serialization, ACK matching, state classification, heartbeat, sequence recovery, and backoff.
-- Real Wi-Fi, BLE, and Classic Bluetooth collection remain `Not implemented`.
+- Added long-lived Core `RuntimeSupervisor` with bounded event channel, dedicated Tokio worker, reconnect loop, queue recovery, and Tauri lifecycle commands.
+- Added local WebSocket fixture coverage for authentication, device list, upload, exact ACK, and disconnect.
+- UI now reads `get_runtime_status`; tray and push-based Tauri events remain deferred.
+- Real platform collectors remain `Not implemented`.
 
 ### Added
 

@@ -1,3 +1,4 @@
+use futures_util::{SinkExt, StreamExt};
 use remote_env_core::collector::CollectorEvent;
 use remote_env_core::config::{ClientConfig, LoggingLevel};
 use remote_env_core::protocol::{Ack, EnvironmentEnvelope, ErrorFrame};
@@ -8,6 +9,8 @@ use remote_env_core::transport::{
     Backoff, ConnectionState, HeartbeatMonitor, ServerEvent, classify_server_message, matches_ack,
 };
 use tempfile::tempdir;
+use tokio::net::TcpListener;
+use tokio_tungstenite::{accept_async, tungstenite::Message};
 
 #[test]
 fn sequence_is_atomic_and_survives_reopen() {
@@ -164,6 +167,8 @@ fn runtime_assigns_sequence_and_queues_mock_event_without_claiming_real_scan() {
     assert_eq!(envelope.sequence, 1);
     let status = runtime.status().unwrap();
     assert_eq!(status.pending, 1);
+    assert_eq!(status.in_flight, 0);
+    assert_eq!(status.blocked, 0);
     assert_eq!(status.wifi, CollectorStatus::NotImplemented);
 }
 
@@ -174,6 +179,68 @@ fn configuration_rejects_rate_limit_above_server_limit() {
     config.identity.device_id = "device-a".into();
     config.max_uploads_per_minute = 61;
     assert!(config.validate().is_err());
+}
+
+#[tokio::test]
+async fn websocket_fixture_authenticates_uploads_and_requires_matching_ack() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut socket = accept_async(stream).await.unwrap();
+        let auth = socket.next().await.unwrap().unwrap();
+        let auth: serde_json::Value = serde_json::from_str(auth.to_text().unwrap()).unwrap();
+        assert_eq!(auth["type"], "auth");
+        socket
+            .send(Message::Text(
+                r#"{"type":"auth_result","success":true}"#.into(),
+            ))
+            .await
+            .unwrap();
+        socket
+            .send(Message::Text(
+                r#"{"type":"device_list","devices":[]}"#.into(),
+            ))
+            .await
+            .unwrap();
+        let upload = socket.next().await.unwrap().unwrap();
+        let upload: serde_json::Value = serde_json::from_str(upload.to_text().unwrap()).unwrap();
+        socket
+            .send(Message::Text(
+                serde_json::json!({
+                    "type": "data_result", "success": true,
+                    "device_id": upload["device_id"], "data_type": upload["data_type"],
+                    "sequence": upload["sequence"]
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        socket.close(None).await.unwrap();
+    });
+    let dir = tempdir().unwrap();
+    let store = StateStore::open(dir.path().join("state.sqlite3")).unwrap();
+    let queue = UploadQueue::new(store, 10);
+    let envelope =
+        EnvironmentEnvelope::new("device-a", "wifi", 1, serde_json::json!({"mock": true}));
+    queue.enqueue(&envelope).unwrap();
+    let identity = remote_env_core::config::DeviceIdentity {
+        device_id: "device-a".into(),
+        device_name: "fixture".into(),
+        platform: "test".into(),
+        platform_version: "1".into(),
+        client_version: "1".into(),
+        hardware: None,
+    };
+    let mut manager =
+        remote_env_core::transport::WebSocketManager::new(std::time::Duration::from_millis(20));
+    let result = manager
+        .run_once(&format!("ws://{address}"), "test-token", &identity, &queue)
+        .await;
+    assert!(result.is_err());
+    assert_eq!(queue.pending_count().unwrap(), 0);
+    server.await.unwrap();
 }
 
 #[test]

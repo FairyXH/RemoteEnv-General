@@ -179,6 +179,15 @@ impl StateStore {
         )? as usize)
     }
 
+    pub fn count_status(&self, status: &str) -> Result<usize, StateError> {
+        let c = self.lock()?;
+        Ok(c.query_row(
+            "SELECT COUNT(*) FROM upload_queue WHERE status=?1",
+            params![status],
+            |r| r.get::<_, i64>(0),
+        )? as usize)
+    }
+
     pub fn recover_sequence(
         &self,
         device_id: &str,

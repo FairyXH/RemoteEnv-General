@@ -6,8 +6,8 @@
 
 ## First Windows surface
 
-The compact shell includes connection state, collector states/counts, queue depth, accepted-upload statistics, and controls disabled until a real runtime exists. It shows honest `Not started`/`Not implemented` values, never simulated hardware data.
+The compact shell includes live Core connection state, collector states/counts, queue depth, accepted-upload statistics, and a Start Runtime command. In browser preview or before Tauri is running, it honestly falls back to unavailable/offline values. It never presents mock events as hardware scans.
 
 ## Tray
 
-Tauri desktop owns the tray boundary. Planned menu: Open, Start/Pause, connection summary, Exit. Close-to-tray is not claimed until lifecycle and exit cleanup are tested.
+Tauri desktop owns the tray boundary. The Phase 1.5 shell does not yet register a tray menu; close-to-tray and tray-triggered graceful shutdown remain deferred until the lifecycle is tested.

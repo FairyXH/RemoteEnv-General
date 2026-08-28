@@ -43,4 +43,4 @@ cargo test -p remote-env-core
 5. Update `CONTEXT.md` and `CHANGELOG.md` after every completed phase.
 6. Hardware claims need real API/device evidence, not compilation alone.
 
-Phase 1 uses SQLite WAL state. Keep tokens out of source, logs, and fixtures. The server currently accepts at most 60 uploads per device per 60 seconds; client scheduling must stay within that limit.
+Phase 1.5 uses a dedicated Tokio runtime thread and bounded event channel. `RuntimeSupervisor` currently owns the reconnect loop and persistence recovery; Tauri owns lifecycle and commands. The current Core status path uses a watch snapshot and the UI reads it with a one-second fallback poll.

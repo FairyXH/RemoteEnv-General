@@ -27,3 +27,5 @@ Sender owns a bounded durable queue. Items complete only after matching `data_re
 | invalid token/schema/authorization | block and report |
 
 Queue uses bounded SQLite durable rows. `sequence_rejected` blocks the affected row and returns a dedicated error; because the server exposes no sequence synchronization endpoint, the client does not guess a replacement sequence.
+
+`RuntimeSupervisor` owns a dedicated Tokio runtime thread and a bounded `mpsc` event channel. It keeps calling the WebSocket manager after failures, recovers in-flight rows, publishes status snapshots through a watch channel, and stops through a oneshot signal. The current sender/receiver loop is implemented within the transport session; splitting it into independently managed tasks is deferred until the protocol needs concurrent application messages.

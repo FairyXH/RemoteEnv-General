@@ -7,6 +7,15 @@
 | Linux | Tauri desktop later | Not implemented | placeholder for NetworkManager/BlueZ adapters. |
 | macOS | Tauri desktop later | Not implemented | placeholder for CoreWLAN/CoreBluetooth adapters. |
 
+## Integration boundary
+
+Shared UI calls Tauri commands. Tauri owns desktop lifecycle and platform integration; Core owns cross-platform runtime, queue, protocol, and persistence. Android Framework integration is reserved for Kotlin/Java behind the Android/Tauri boundary and is not implemented in this phase.
+
+```text
+Shared UI -> Tauri -> Windows integration
+                 -> Android integration -> Kotlin/Java -> Rust Core
+```
+
 ## Windows plan
 
 1. Implement Wi-Fi scanning through tested Windows WLAN APIs behind `WifiCollector`.

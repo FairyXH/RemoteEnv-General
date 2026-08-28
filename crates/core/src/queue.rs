@@ -96,4 +96,12 @@ impl UploadQueue {
     pub fn pending_count(&self) -> Result<usize, QueueError> {
         Ok(self.store.count_pending()?)
     }
+
+    pub fn in_flight_count(&self) -> Result<usize, QueueError> {
+        Ok(self.store.count_status("in_flight")?)
+    }
+
+    pub fn blocked_count(&self) -> Result<usize, QueueError> {
+        Ok(self.store.count_status("blocked")?)
+    }
 }

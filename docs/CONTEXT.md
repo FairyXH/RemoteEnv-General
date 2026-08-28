@@ -6,7 +6,7 @@ Read this file, `ARCHITECTURE.md`, and `DEVELOPMENT.md` before changes. For tran
 
 ## Current state
 
-Phase 1 implementation is partial: Core persistence, queue, protocol handling, and a single WebSocket lifecycle pass are implemented. A long-running reconnecting runtime loop and Tauri composition remain. Real platform scanners remain intentionally unimplemented.
+Phase 1.5 implementation is partial: Core persistence, queue, protocol handling, a long-lived supervisor, Tauri commands, and a local WebSocket fixture test are implemented. Tray behavior and production-grade UI event push remain. Real platform scanners remain intentionally unimplemented.
 
 ## Completed
 
@@ -17,7 +17,7 @@ Phase 1 implementation is partial: Core persistence, queue, protocol handling, a
 
 ## Not implemented
 
-- Tauri runtime composition and UI status commands.
+- Full Tauri tray lifecycle and push-based UI status events.
 - Wi-Fi, BLE, Classic Bluetooth.
 - Windows tray behavior, Android generated project, Linux/macOS collection.
 - Hardware integration tests.
@@ -45,10 +45,26 @@ Phase 1 implementation is partial: Core persistence, queue, protocol handling, a
 ## Phase 1 status
 
 - Configuration, stable identity, SQLite-backed sequences, bounded durable queue, ACK matching, heartbeat monitoring, explicit states, and capped infinite retry backoff are implemented.
-- `cargo fmt --check`, `cargo check -p remote-env-core`, and `cargo test -p remote-env-core` pass. Full workspace validation is blocked by missing Tauri `icons/icon.ico`.
+- `cargo fmt --check`, `cargo check --workspace`, and `cargo test --workspace` pass. `npm run build` passes.
 
-## Next
+## Phase 1.5 status
 
-1. Add Tauri runtime composition and status snapshots.
-2. Add a MockCollector integration harness against a local WebSocket fixture.
-3. Phase 2 — implement Windows Wi-Fi collection without changing Core queue/transport contracts.
+- Tauri owns `AppState`, startup commands, stop commands, and status queries; Core owns RuntimeSupervisor and all transport/state logic.
+- RuntimeSupervisor uses a bounded Tokio event channel, a dedicated Tokio runtime thread, persistent queue recovery, and infinite reconnect through WebSocketManager.
+- Mock events enter through `submit_test_event`; they are explicitly marked `mock` and no real scanner is claimed.
+- Fixture coverage validates auth, device list, upload, exact ACK, and connection close behavior.
+- UI reads `get_runtime_status`; current refresh is a low-rate fallback until Tauri event push is added.
+- Tray is not implemented yet.
+
+## Phase 1.5 status
+
+- Tauri runtime integration: implemented through `AppState`, `start_runtime`, `stop_runtime`, `get_runtime_status`, and `submit_test_event`.
+- WebSocket Supervisor: long-lived reconnect loop on a dedicated Tokio worker thread.
+- Queue integration: bounded event channel feeds persistent SQLite queue; in-flight rows are recovered after transport errors.
+- Mock Collector: command-generated events are marked with `{ "mock": true }`; no hardware scanner is enabled.
+- Fixture Server: local Tokio/Tungstenite fixture covers auth, `device_list`, upload, exact ACK, and close.
+- UI: reads Core status via Tauri command with one-second fallback polling.
+- Tray: partial/blocked; no tray menu is registered yet.
+- Tests: workspace Rust tests and UI production build pass.
+- Known issues: sender/receiver are still coordinated inside `WebSocketManager::run_once`; no full reconnect integration scenario or Tauri GUI manual run has been completed.
+- Next phase: Phase 2 — Windows Wi-Fi Collector.
