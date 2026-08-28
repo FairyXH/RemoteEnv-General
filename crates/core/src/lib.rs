@@ -1,4 +1,5 @@
 pub mod collector;
+pub mod bluetooth;
 pub mod config;
 pub mod dispatcher;
 pub mod protocol;

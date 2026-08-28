@@ -14,4 +14,9 @@ windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
     "Win32_NetworkManagement_WiFi",
     "Win32_System_Memory",
+    "Win32_Devices_Bluetooth",
+] }
+windows = { version = "0.61", features = [
+    "Devices_Bluetooth_Advertisement",
+    "Foundation",
 ] }
