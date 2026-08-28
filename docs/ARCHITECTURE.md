@@ -63,6 +63,6 @@ Event completion is target-scoped: an event is complete only when every selected
 
 ## Phase 2-A Runtime integration
 
-`RuntimeSupervisor::start_with_collector` can now accept a platform-provided scan closure. The worker runs on a dedicated thread/runtime, waits on the configured interval, executes the blocking WLAN call through `spawn_blocking` with a 120-second timeout, emits a `CollectorEvent` into the existing bounded event channel, and publishes `WiFiRuntimeStatus`. Configuration updates change `wifi_enabled` and `scan_interval_seconds`; shutdown is stop-aware and joins the worker before publishing `Stopped`.
+`RuntimeSupervisor::start_with_collector` starts an optional platform scan callback on a dedicated worker runtime. Scans run through `spawn_blocking`, on the configured `scan_interval_seconds`, and stop checks prevent new work after shutdown. A bounded 120-second timeout converts a hung scan into a Wi-Fi Error state; the Runtime continues and later cycles can retry. Runtime config updates apply `wifi_enabled` and the interval without restarting the process.
 
-The desktop shell supplies `NativeWlanProvider` to this production path. Upload still goes through sequence allocation, `upload_deliveries`, `UploadDispatcher`, and `ServerWorker`; the collector has no WebSocket access.
+The desktop shell supplies the Windows `NativeWlanProvider`. Successful scans emit one `wifi` `CollectorEvent`, which follows the existing sequence, `upload_deliveries`, dispatcher, WebSocket, and ACK path. `RuntimeStatus.wifi_runtime` exposes enablement, state, timestamps, count, counters, duration, and error text. The UI displays the current state, aggregate AP count, scan duration, counters, and errors.

@@ -17,6 +17,8 @@ SSID bytes are never lossy-decoded: valid UTF-8 is exposed as `ssid`, invalid by
 
 The provider enumerates every WLAN interface and continues if one interface's BSS query fails. Frequency is converted to MHz and channel only when the mapping is known. 2.4, 5, and 6 GHz are expressible; 6 GHz depends on Windows, adapter, and driver support. Security authentication/encryption and network type are unavailable until reliable IE parsing is added. Normal desktop users generally do not need Administrator privileges, but WLAN service, policy, and drivers can deny results.
 
-## Tests
+## Runtime integration
 
-Pure model and collector tests use a mock `WlanProvider`. On Windows, run `cargo run -p remote-env-platform-windows --example windows_wifi_scan`; it prints only interface count, network count, and duration. The Tauri `scan_wifi` command exercises the same provider and returns a CollectorEvent; upload remains owned by RuntimeSupervisor.
+The production desktop path passes `NativeWlanProvider` into `RuntimeSupervisor::start_with_collector`. The worker uses the configured `scan_interval_seconds`, skips work while `wifi_enabled` is false, isolates blocking WLAN calls, applies a 120-second timeout, emits status transitions, and stops with the Runtime. Configuration updates are forwarded without process restart.
+
+The current test coverage proves worker scheduling and disabled behavior with deterministic mock callbacks. The full Runtime-to-`upload_deliveries` Wi-Fi fixture and real backend Wi-Fi upload remain pending. Hardware validation is environment-dependent: the current USB adapter reports Hardware On but Software Off, so Windows returned zero BSS records and `netsh wlan show networks mode=bssid` rejected the scan.
