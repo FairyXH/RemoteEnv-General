@@ -286,6 +286,13 @@ impl ServerWorker {
                             self.refresh_counts();
                         }
                         ServerEvent::Invalid => return Err(WorkerError::Blocked(format!("服务器返回未知协议消息: {}", value))),
+                        ServerEvent::SequenceRejected => {
+                            if let Some((id, _)) = in_flight.take() {
+                                self.dispatcher.complete_delivery(&self.profile.id, id)?;
+                                self.status.last_error = Some(format!("服务器判定该序号已存在或不是最新，已确认本地投递: {}", value));
+                                self.refresh_counts();
+                            }
+                        }
                         ServerEvent::SequenceRejected | ServerEvent::FatalError if value["code"] == "unknown_device" => {
                             if let Some((id, envelope)) = in_flight.take() {
                                 self.dispatcher.block(&self.profile.id, id)?;
