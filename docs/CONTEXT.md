@@ -6,7 +6,7 @@ Read this file, `ARCHITECTURE.md`, and `DEVELOPMENT.md` before changes. For tran
 
 ## Current state
 
-Phase 1 implementation is complete for the Core infrastructure. Real platform scanners remain intentionally unimplemented.
+Phase 1 implementation is partial: Core persistence, queue, protocol handling, and a single WebSocket lifecycle pass are implemented. A long-running reconnecting runtime loop and Tauri composition remain. Real platform scanners remain intentionally unimplemented.
 
 ## Completed
 
