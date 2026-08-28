@@ -21,6 +21,7 @@ struct TestServer {
     ack: Arc<AtomicBool>,
     auth_failure: Arc<AtomicBool>,
     heartbeat_count: Arc<AtomicUsize>,
+    rate_limited: Arc<AtomicBool>,
     disconnect: Arc<Notify>,
     changed: Arc<Notify>,
 }
@@ -37,6 +38,7 @@ impl TestServer {
         let disconnect = Arc::new(Notify::new());
         let auth_failure = Arc::new(AtomicBool::new(false));
         let heartbeat_count = Arc::new(AtomicUsize::new(0));
+        let rate_limited = Arc::new(AtomicBool::new(false));
         let changed = Arc::new(Notify::new());
         let task_state = (
             received.clone(),
@@ -48,6 +50,7 @@ impl TestServer {
             auth_failure.clone(),
             changed.clone(),
             heartbeat_count.clone(),
+            rate_limited.clone(),
         );
         tokio::spawn(async move {
             loop {
@@ -103,6 +106,14 @@ impl TestServer {
                             Some("environment_data") => {
                                 state.0.lock().unwrap().push(value.clone());
                                 state.7.notify_waiters();
+                                if state.9.load(Ordering::SeqCst) {
+                                    let _ = socket
+                                        .send(Message::Text(
+                                            r#"{"type":"error","code":"rate_limited","message":"slow down","retryable":true}"#.into(),
+                                        ))
+                                        .await;
+                                    continue;
+                                }
                                 if state.4.load(Ordering::SeqCst) {
                                     let ack = serde_json::json!({"type":"data_result","success":true,"device_id":value["device_id"],"data_type":value["data_type"],"sequence":value["sequence"]});
                                     let _ =
@@ -131,6 +142,7 @@ impl TestServer {
             disconnect,
             auth_failure,
             heartbeat_count,
+            rate_limited,
             changed,
         }
     }
@@ -163,6 +175,10 @@ impl TestServer {
 
     fn auth_frames(&self) -> Vec<Value> {
         self.auth_frames.lock().unwrap().clone()
+    }
+
+    fn rate_limit(&self, enabled: bool) {
+        self.rate_limited.store(enabled, Ordering::SeqCst);
     }
 }
 
@@ -407,5 +423,45 @@ async fn phase_175c_profile_removal_cancels_target_delivery() {
     runtime.update_config(single).unwrap();
     wait_for_profiles(&runtime, &["b"]).await;
     wait_delivery_status(&store, "a", "delete-device", "wifi", 1, "cancelled").await;
+    runtime.stop();
+}
+
+#[tokio::test]
+async fn phase_175c_single_to_multi_and_rate_limit_keep_other_target_independent() {
+    let a = TestServer::start().await;
+    let b = TestServer::start().await;
+    let dir = tempdir().unwrap();
+    let store = StateStore::open(dir.path().join("state.sqlite3")).unwrap();
+    let identity = DeviceIdentity {
+        device_id: "transition-device".into(),
+        device_name: "fixture".into(),
+        platform: "test".into(),
+        platform_version: "1".into(),
+        client_version: "1".into(),
+        hardware: None,
+    };
+    let mut single = config(identity, &a, &b);
+    single.server_mode = ServerMode::Single;
+    let mut runtime = RuntimeSupervisor::start(single.clone(), store.clone()).unwrap();
+    wait_ready(&runtime, 1).await;
+    runtime.submit(event("single")).unwrap();
+    a.wait_for(|server| server.sequences().contains(&1)).await;
+    assert!(b.sequences().is_empty());
+    let mut multi = single;
+    multi.server_mode = ServerMode::Multi;
+    runtime.update_config(multi).unwrap();
+    wait_ready(&runtime, 2).await;
+    b.rate_limit(true);
+    runtime.submit(event("limited")).unwrap();
+    a.wait_for(|server| server.sequences().contains(&2)).await;
+    b.wait_for(|server| server.sequences().contains(&2)).await;
+    wait_delivery_status(&store, "a", "transition-device", "wifi", 2, "completed").await;
+    assert_ne!(
+        store
+            .delivery_status("b", "transition-device", "wifi", 2)
+            .unwrap()
+            .as_deref(),
+        Some("completed")
+    );
     runtime.stop();
 }
