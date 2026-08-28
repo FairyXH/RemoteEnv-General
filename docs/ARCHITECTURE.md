@@ -42,3 +42,7 @@ Collectors must not call WebSocket APIs directly. UI reads application status sn
 - Sequence state is durable and strictly monotonic per data type.
 - Reconnect is infinite, capped exponential backoff with jitter.
 - Tokens never appear in logs or UI status snapshots.
+
+## Phase 1 implementation
+
+`StateStore` stores configuration, identity, per-type sequences, and upload rows in SQLite WAL mode. `UploadQueue` is a bounded facade over this store. `WebSocketManager` authenticates first, validates `device_list`, drains only matching ACKs, sends application heartbeats, and exposes reconnect backoff. Platform crates still report `NotImplemented`; no platform API is present in Core.

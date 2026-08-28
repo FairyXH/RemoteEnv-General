@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Phase 1
+
+- Added SQLite-backed configuration, stable identity, durable per-data-type sequences, bounded persistent upload queue, ACK matching, heartbeat monitoring, explicit connection states, and capped infinite reconnect backoff.
+- Added Core tests for persistence, queue recovery, serialization, ACK matching, state classification, heartbeat, sequence recovery, and backoff.
+- Real Wi-Fi, BLE, and Classic Bluetooth collection remain `Not implemented`.
+
 ### Added
 
 - Phase 0 architecture, platform, protocol, UI, development, WebSocket, context, and changelog documentation.
@@ -10,7 +16,7 @@
 ### Verification
 
 - Shared React UI completed `npm install` and `npm run build` successfully.
-- Cargo workspace validation is pending a usable Rust toolchain; rustup installation did not create Cargo on this host.
+- Core Cargo validation passes with Rust `1.98.0`; full workspace validation is blocked by missing `app/desktop/src-tauri/icons/icon.ico`.
 
 ### Recorded
 

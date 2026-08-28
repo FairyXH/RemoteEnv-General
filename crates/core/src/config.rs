@@ -29,6 +29,7 @@ pub struct ClientConfig {
     pub classic_bluetooth_enabled: bool,
     pub scan_interval_seconds: u64,
     pub heartbeat_interval_seconds: u64,
+    pub max_uploads_per_minute: u64,
     pub max_queue_size: u64,
     pub log_level: LoggingLevel,
 }
@@ -51,6 +52,7 @@ impl Default for ClientConfig {
             classic_bluetooth_enabled: false,
             scan_interval_seconds: 30,
             heartbeat_interval_seconds: 15,
+            max_uploads_per_minute: 60,
             max_queue_size: 1000,
             log_level: LoggingLevel::Info,
         }
@@ -71,8 +73,11 @@ impl ClientConfig {
         if self.scan_interval_seconds == 0 || self.heartbeat_interval_seconds == 0 {
             return Err("intervals must be positive".into());
         }
-        if self.max_queue_size == 0 {
-            return Err("max_queue_size must be positive".into());
+        if self.max_queue_size == 0
+            || self.max_uploads_per_minute == 0
+            || self.max_uploads_per_minute > 60
+        {
+            return Err("max_queue_size and max_uploads_per_minute are invalid".into());
         }
         Ok(())
     }

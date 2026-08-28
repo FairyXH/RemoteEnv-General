@@ -1,6 +1,8 @@
+use remote_env_core::collector::CollectorEvent;
 use remote_env_core::config::{ClientConfig, LoggingLevel};
 use remote_env_core::protocol::{Ack, EnvironmentEnvelope, ErrorFrame};
 use remote_env_core::queue::{QueueError, UploadQueue};
+use remote_env_core::runtime::CollectorStatus;
 use remote_env_core::state::StateStore;
 use remote_env_core::transport::{
     Backoff, ConnectionState, HeartbeatMonitor, ServerEvent, classify_server_message, matches_ack,
@@ -42,6 +44,7 @@ fn identity_is_created_once_and_config_is_round_trippable() {
         classic_bluetooth_enabled: false,
         scan_interval_seconds: 30,
         heartbeat_interval_seconds: 15,
+        max_uploads_per_minute: 60,
         max_queue_size: 100,
         log_level: LoggingLevel::Info,
     };
@@ -146,8 +149,32 @@ fn transport_classifies_ack_errors_and_heartbeat_contract() {
     assert!(!monitor.is_timed_out());
 }
 
-#[allow(dead_code)]
-fn _queue_type_is_send_sync(_: &UploadQueue) {}
+#[test]
+fn runtime_assigns_sequence_and_queues_mock_event_without_claiming_real_scan() {
+    let dir = tempdir().unwrap();
+    let store = StateStore::open(dir.path().join("state.sqlite3")).unwrap();
+    let mut runtime = remote_env_core::runtime::Runtime::new("device-a", store, 10);
+    let envelope = runtime
+        .submit_event(CollectorEvent {
+            data_type: "wifi".into(),
+            timestamp_ms: 1,
+            data: serde_json::json!({"mock": true}),
+        })
+        .unwrap();
+    assert_eq!(envelope.sequence, 1);
+    let status = runtime.status().unwrap();
+    assert_eq!(status.pending, 1);
+    assert_eq!(status.wifi, CollectorStatus::NotImplemented);
+}
+
+#[test]
+fn configuration_rejects_rate_limit_above_server_limit() {
+    let mut config = ClientConfig::default();
+    config.token = "secret".into();
+    config.identity.device_id = "device-a".into();
+    config.max_uploads_per_minute = 61;
+    assert!(config.validate().is_err());
+}
 
 #[test]
 fn invalid_queue_capacity_is_rejected() {

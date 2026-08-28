@@ -6,6 +6,9 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[package.metadata.tauri-winres]
+icon_path = ""
+
 [lib]
 name = "remote_env_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]

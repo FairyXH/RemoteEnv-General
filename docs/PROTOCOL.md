@@ -26,6 +26,8 @@ Time is Unix milliseconds. `data_type` must match `^[a-z][a-z0-9_.-]{0,63}$`.
 - `sequence_rejected` and `rate_limited` are currently retryable, but a rejected sequence cannot be resent unchanged.
 - Current server limit: 60 uploads per device per 60 seconds.
 
+The client sends collector authentication with `device.name`, `device.device_type` (`generic`), and capabilities. It requires `auth_result` followed by `device_list` before draining its queue. On `sequence_rejected`, the row is blocked rather than resent unchanged; no server-side sequence synchronization API was found.
+
 ## Documentation difference
 
 Server docs call the success response a generic data result. Runtime code establishes the exact `data_result` shape above. Client implementation follows runtime behavior.

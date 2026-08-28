@@ -2,6 +2,7 @@ pub mod collector;
 pub mod config;
 pub mod protocol;
 pub mod queue;
+pub mod runtime;
 pub mod state;
 pub mod transport;
 

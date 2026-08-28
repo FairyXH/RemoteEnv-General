@@ -18,13 +18,13 @@ function App() {
           <p className="eyebrow">ENVIRONMENT COLLECTOR</p>
           <h1>RemoteEnvCollector</h1>
         </div>
-        <span className="state"><i /> Offline</span>
+        <span className="state"><i /> Runtime offline</span>
       </header>
 
       <section className="connection" aria-label="WebSocket status">
         <span className="label">WebSocket</span>
-        <strong>Not configured</strong>
-        <span className="muted">No server connection has been created.</span>
+        <strong>Disconnected</strong>
+        <span className="muted">Runtime status is not connected to the Tauri shell yet.</span>
       </section>
 
       <section className="group" aria-label="Collectors">
@@ -38,14 +38,14 @@ function App() {
       </section>
 
       <section className="metrics" aria-label="Runtime statistics">
-        <div><span>Upload queue</span><strong>0 pending</strong></div>
-        <div><span>Accepted uploads</span><strong>0</strong></div>
+        <div><span>Upload queue</span><strong>Runtime unavailable</strong></div>
+        <div><span>Accepted uploads</span><strong>Runtime unavailable</strong></div>
         <div><span>Last event</span><strong>None</strong></div>
       </section>
 
       <footer>
         <button type="button" disabled title="Available after the collector runtime is implemented">Start collection</button>
-        <span>Phase 0 scaffold</span>
+        <span>Phase 1 infrastructure</span>
       </footer>
     </main>
   );

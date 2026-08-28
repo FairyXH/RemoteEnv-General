@@ -6,7 +6,7 @@ Read this file, `ARCHITECTURE.md`, and `DEVELOPMENT.md` before changes. For tran
 
 ## Current state
 
-Phase 0 scaffolding. The client directory was empty before this work and is now a Git repository. No existing client files were removed.
+Phase 1 implementation is complete for the Core infrastructure. Real platform scanners remain intentionally unimplemented.
 
 ## Completed
 
@@ -17,7 +17,7 @@ Phase 0 scaffolding. The client directory was empty before this work and is now 
 
 ## Not implemented
 
-- WS/auth/heartbeat/reconnect/queue/config persistence.
+- Tauri runtime composition and UI status commands.
 - Wi-Fi, BLE, Classic Bluetooth.
 - Windows tray behavior, Android generated project, Linux/macOS collection.
 - Hardware integration tests.
@@ -33,7 +33,7 @@ Phase 0 scaffolding. The client directory was empty before this work and is now 
 ## Toolchain inspection
 
 - Node `v24.14.0`, npm `11.9.0`, Git `2.55.0.windows.1` installed.
-- Rust/Cargo/rustup, Flutter, and Dart absent from PATH.
+- Rust `1.98.0`, Cargo `1.98.0`, and rustup stable MSVC are available.
 - `winget` exists but community source queries failed; Rust bootstrap may require official installer.
 
 ## Important paths
@@ -42,14 +42,13 @@ Phase 0 scaffolding. The client directory was empty before this work and is now 
 - Server API: `D:\Files\Develop\Algorithm_Development\Python\RemoteEnvProject\RemoteEnvServer\docs\api.md`
 - Server WS runtime: `D:\Files\Develop\Algorithm_Development\Python\RemoteEnvProject\RemoteEnvServer\remote_env_server\bus.py`
 
-## Verification status
+## Phase 1 status
 
-- `npm install` and `npm run build` completed successfully on 2026-08-27.
-- Production dependency audit returned `0` vulnerabilities; development dependency audit reported two advisories and needs a deliberate dependency-update review later.
-- Cargo verification is blocked because Rust/Cargo/rustup are absent. The official rustup installer was downloaded and invoked twice, but it exited without creating `%USERPROFILE%\.cargo`; do not claim Cargo verification until this machine has a usable Rust toolchain.
+- Configuration, stable identity, SQLite-backed sequences, bounded durable queue, ACK matching, heartbeat monitoring, explicit states, and capped infinite retry backoff are implemented.
+- `cargo fmt --check`, `cargo check -p remote-env-core`, and `cargo test -p remote-env-core` pass. Full workspace validation is blocked by missing Tauri `icons/icon.ico`.
 
 ## Next
 
-1. Repair the Rust toolchain installation and run `cargo fmt --check`, `cargo check --workspace`, and `cargo test --workspace`.
-2. Design durable configuration and per-data-type sequence persistence before sender implementation.
-3. Build protocol tests against a local server fixture before physical collection.
+1. Add Tauri runtime composition and status snapshots.
+2. Add a MockCollector integration harness against a local WebSocket fixture.
+3. Phase 2 — implement Windows Wi-Fi collection without changing Core queue/transport contracts.

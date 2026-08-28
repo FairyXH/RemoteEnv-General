@@ -70,6 +70,10 @@ impl UploadQueue {
         Ok(())
     }
     pub fn claim_next(&self) -> Result<Option<QueuedEnvelope>, QueueError> {
+        let _guard = self
+            .operation_lock
+            .lock()
+            .map_err(|_| QueueError::State(StateError::Poisoned))?;
         let mut items = self.store.pending()?;
         let Some((id, envelope)) = items.drain(..).next() else {
             return Ok(None);

@@ -26,6 +26,14 @@ npm run tauri dev
 
 `cargo check --workspace` includes the Tauri crate. Android is intentionally outside the first Windows validation gate.
 
+While the desktop bundle is missing its icon, validate the implemented Core independently:
+
+```powershell
+cargo fmt --check
+cargo check -p remote-env-core
+cargo test -p remote-env-core
+```
+
 ## Working agreement
 
 1. Read `CONTEXT.md`, `ARCHITECTURE.md`, and this file before changes.
@@ -34,3 +42,5 @@ npm run tauri dev
 4. Commit each completed logical unit.
 5. Update `CONTEXT.md` and `CHANGELOG.md` after every completed phase.
 6. Hardware claims need real API/device evidence, not compilation alone.
+
+Phase 1 uses SQLite WAL state. Keep tokens out of source, logs, and fixtures. The server currently accepts at most 60 uploads per device per 60 seconds; client scheduling must stay within that limit.
