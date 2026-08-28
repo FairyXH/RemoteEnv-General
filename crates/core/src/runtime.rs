@@ -15,6 +15,11 @@ use tokio::sync::{mpsc, watch};
 pub enum CollectorStatus {
     NotImplemented,
     Disabled,
+    Starting,
+    Scanning,
+    Ready,
+    Error,
+    Stopped,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

@@ -13,6 +13,7 @@ const collectors: Array<{ name: CollectorName; state: string; count: string }> =
 
 type RuntimeStatus = {
   connection: string;
+  wifi: string;
   pending: number;
   in_flight: number;
   blocked: number;
@@ -23,6 +24,7 @@ type RuntimeStatus = {
 
 const initialStatus: RuntimeStatus = {
   connection: "Disconnected",
+  wifi: "Disabled",
   pending: 0,
   in_flight: 0,
   blocked: 0,
@@ -80,7 +82,7 @@ function App() {
         <div className="section-heading"><h2>Collectors</h2><span>0 active</span></div>
         {collectors.map((collector) => (
           <div className="row" key={collector.name}>
-            <div><strong>{collector.name}</strong><span>{collector.state}</span></div>
+            <div><strong>{collector.name}</strong><span>{collector.name === "Wi-Fi" ? status.wifi : collector.state}</span></div>
             <b>{collector.count}</b>
           </div>
         ))}
