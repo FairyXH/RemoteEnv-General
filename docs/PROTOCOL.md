@@ -35,3 +35,7 @@ Time is Unix milliseconds. `data_type` must match `^[a-z][a-z0-9_.-]{0,63}$`.
 ## Documentation difference
 
 Server docs call the success response a generic data result. Runtime code establishes the exact `data_result` shape above. Client implementation follows runtime behavior.
+
+## Phase 1.75-C test evidence
+
+The runtime integration fixture sends and validates `auth`, `auth_result`, `device_list`, `environment_data`, `data_result`, `heartbeat`, and `pong` frames. A/B receive one immutable envelope per event; target delivery state is persisted separately. `rate_limited` is treated as retryable and does not acknowledge the delivery. Real backend validation is still pending and is never part of the default test suite.

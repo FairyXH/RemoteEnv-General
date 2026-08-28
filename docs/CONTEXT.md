@@ -47,6 +47,7 @@ Phase 1.5 implementation is partial: Core persistence, queue, protocol handling,
 Status: Partial. Runtime wiring is present: `RuntimeSupervisor -> DispatcherSupervisor -> ServerWorker(s)`, target delivery persistence is used for new events, and per-server status is exposed to UI. Windows Wi-Fi, BLE, and Classic Bluetooth remain `Not implemented`.
 
 Local dual-server runtime coverage now verifies independent A/B readiness, same-envelope delivery, recovery, Single A -> Single B switching, and authentication blocking. Broader profile lifecycle, rate-limit, explicit ACK-isolation, and the real-backend smoke test remain pending; phase remains Partial.
+The fixture has since added explicit A/B delivery-state assertions, heartbeat/auth-frame observation, Single A -> Multi A+B, profile removal cancellation, profile URL/token replacement, and rate-limit isolation. `Multi A+B -> Single B`, missing-pong timeout, and reliable propagation of detached fixture task failures remain follow-up coverage.
 - Configuration, stable identity, SQLite-backed sequences, bounded durable queue, ACK matching, heartbeat monitoring, explicit states, and capped infinite retry backoff are implemented.
 - `cargo fmt --check`, `cargo check --workspace`, and `cargo test --workspace` pass. `npm run build` passes.
 

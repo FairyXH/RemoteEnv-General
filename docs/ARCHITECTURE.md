@@ -54,3 +54,7 @@ Collectors must not call WebSocket APIs directly. UI reads application status sn
 `RuntimeSupervisor -> DispatcherSupervisor -> one ServerWorker per selected ServerProfile`. Each worker owns its WebSocket session, heartbeat interval, reconnect backoff, stop signal, in-flight delivery, and status watch channel. Events allocate one durable global sequence and create one target delivery per selected server. ACK and recovery are target-scoped. Removed targets are stopped and their pending/in-flight deliveries are cancelled. Authentication and fatal protocol errors move only that worker to `Blocked`; transport errors reconnect only that target.
 
 Event completion is target-scoped: an event is complete only when every selected delivery is acknowledged or explicitly cancelled. A blocked delivery remains incomplete and visible.
+
+### Phase 1.75-C verification status
+
+`crates/core/tests/phase175c.rs` now drives the live `RuntimeSupervisor -> DispatcherSupervisor -> ServerWorker` chain against independent A/B listeners. It verifies dual readiness, identical event envelopes, target-local recovery, Single-to-Multi expansion, profile replacement/removal, rate-limit isolation, heartbeat observation, and authentication blocking. The phase remains Partial until the remaining lifecycle and real-backend checks are executed.
