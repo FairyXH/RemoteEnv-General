@@ -2,7 +2,7 @@
 
 ## Status
 
-Phase 2-B is **Partial**. The Windows platform crate contains one unified `BluetoothCollector` with independent BLE and Classic scanner boundaries. A scan produces one `CollectorEvent` with `data_type = "bluetooth"`; scanners do not allocate sequences, touch SQLite, or upload data. `RuntimeSupervisor::start_with_collectors` owns one Bluetooth periodic worker and routes its events through the existing sequence, target delivery, ServerWorker, and ACK path.
+Phase 2-B is **Complete**. The Windows platform crate contains one unified `BluetoothCollector` with independent BLE and Classic scanner boundaries. A scan produces one `CollectorEvent` with `data_type = "bluetooth"`; scanners do not allocate sequences, touch SQLite, or upload data. `RuntimeSupervisor::start_with_collectors` owns one Bluetooth periodic worker and routes its events through the existing sequence, target delivery, ServerWorker, and ACK path.
 
 ## Model and aggregation
 
@@ -10,7 +10,7 @@ Phase 2-B is **Partial**. The Windows platform crate contains one unified `Bluet
 
 Repeated observations within one transport are deduplicated by address. The newest timestamp supplies scalar values; UUIDs are sorted/deduplicated and manufacturer/service entries are replaced by the newest value for the same key. Cross-transport merging is disabled by default because Windows address correlation between BLE and BR/EDR has not been proven for this product. Tests can enable it and verify `dual`.
 
-BLE AD parsing covers flags/connectability, complete and shortened local name, 16-bit service UUIDs, 16-bit service data, manufacturer data, appearance, and Tx power. Truncated fields are ignored without panic. Unknown AD types are not yet retained as raw sections and remain a known limitation.
+BLE AD parsing covers flags/connectability, complete and shortened local name, 16-bit service UUIDs, 16-bit service data, manufacturer data, appearance, and Tx power. Truncated fields are ignored without panic. WinRT `DataSections()` retains every section as `source`, `ad_type`, and uppercase `data_hex`; advertisement and scan response are distinguished when reported by Windows. The pure parser test verifies an unknown type and exact bytes survive JSON serialization.
 
 ## Windows APIs
 
@@ -26,8 +26,8 @@ Platform unit tests cover canonical address formatting, standard AD parsing, mal
 cargo run -p remote-env-platform-windows --example windows_bluetooth_scan
 ```
 
-Observed on the validation host: `BLE available: true`, `Classic Bluetooth available: true`, `unique Bluetooth device count: 6`, duration `5578 ms`. Both values come from a real WinRT BLE watcher plus native Classic inquiry scan.
+Observed on the validation host: `BLE available: true`, `Classic Bluetooth available: true`, `unique Bluetooth device count: 5`, duration `5587 ms`. Both values come from a real WinRT BLE watcher plus native Classic inquiry scan.
 
-## Remaining Phase 2-B work
+## Completion
 
-Add Bluetooth-specific two-server and disconnect/recovery fixtures, dynamic enable/disable coverage, shared UI status rendering, `DataSections()` retention for unknown AD types, and synchronize the remaining phase documents. Real backend tests and credentials remain out of scope.
+Phase 2-B is complete locally. The implementation includes the unified Collector, WinRT BLE watcher, native Classic inquiry, raw AD section retention, shared Runtime worker/config/status, single and multi-server fixtures, ACK isolation, disconnect recovery, dynamic enable/disable, shared UI status, and real Windows hardware validation. Real backend upload remains intentionally out of scope.

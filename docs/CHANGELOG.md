@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Phase 2-B Windows Bluetooth Complete
+
+- Completed unified BLE + Classic Bluetooth Collector using WinRT `BluetoothLEAdvertisementWatcher` and native Bluetooth inquiry APIs.
+- Added unified `bluetooth` event payload, shared sequence namespace, Runtime-owned worker, dynamic `bluetooth_enabled`, UI status, raw BLE AD section preservation, multi-server ACK isolation, disconnect recovery, and local fixtures.
+- Real Windows probe verified BLE and Classic availability with 5 unique devices; no real backend credentials or upload test was used.
+
 ### Phase 2-A Runtime integration (partial)
 
 - Added optional RuntimeSupervisor platform scan callback with stop-aware periodic scheduling, dynamic interval/enable updates, blocking isolation, and a 120-second timeout.

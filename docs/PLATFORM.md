@@ -2,7 +2,7 @@
 
 | Platform | Shell | Collector status | Current boundary |
 | --- | --- | --- | --- |
-| Windows | Tauri desktop | Wi-Fi available; BLE/Classic Bluetooth not implemented | `remote-env-platform-windows` owns the WLAN adapter. |
+| Windows | Tauri desktop | Wi-Fi and unified BLE/Classic Bluetooth available | `remote-env-platform-windows` owns WLAN and Bluetooth adapters. |
 | Android | Tauri mobile planned | Not implemented | independent adapter placeholder; future Tauri mobile/Kotlin bridge. |
 | Linux | Tauri desktop later | Not implemented | placeholder for NetworkManager/BlueZ adapters. |
 | macOS | Tauri desktop later | Not implemented | placeholder for CoreWLAN/CoreBluetooth adapters. |
@@ -18,10 +18,9 @@ Shared UI -> Tauri -> Windows integration
 
 ## Windows plan
 
-1. Implement Wi-Fi scanning through tested Windows WLAN APIs behind `WifiCollector`.
-2. Normalize SSID, BSSID, RSSI, channel/frequency/security and scanner metadata to core types.
-3. Evaluate Rust BLE integration against Windows Runtime advertisement APIs with real fixtures.
-4. Investigate Classic Bluetooth independently. BLE capability is not Classic Bluetooth capability; report `Unavailable` when no stable path exists.
-5. Attach tested Tauri tray lifecycle only after a truthful runtime status exists.
+1. Wi-Fi scanning uses tested Windows WLAN APIs behind `WifiCollector`.
+2. Bluetooth uses one `BluetoothCollector` with WinRT BLE watcher and native Classic inquiry.
+3. Normalize both sources into one `bluetooth` event and preserve unknown BLE AD sections.
+4. Keep Bluetooth worker and status under the existing RuntimeSupervisor; no Bluetooth upload subsystem exists.
 
 Platform crates may not expose native Windows/Android types across their collector result boundary.

@@ -6,7 +6,7 @@
 
 ## First Windows surface
 
-The UI reads `get_runtime_status` and renders the real `servers` list, including each profile's connection state and target delivery counts. Wi-Fi status is now sourced from the runtime status model; BLE and Classic Bluetooth remain `Not implemented`.
+The UI reads `get_runtime_status` and renders the real `servers` list, including each profile's connection state and target delivery counts. Wi-Fi and Bluetooth status are sourced from the Runtime status model. Bluetooth is now represented by one shared Runtime status card; the UI does not claim separate BLE/Classic upload states. Detailed payloads retain `transport` (`ble`, `classic`, `dual`) and raw AD sections, while the main status displays the aggregate Bluetooth worker.
 
 ## Tray
 

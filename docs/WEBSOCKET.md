@@ -34,4 +34,6 @@ Phase 1.75-B introduces target-scoped delivery records without duplicating the e
 
 Each selected target has its own `ServerWorker`: independent WebSocket, heartbeat, reconnect backoff, stop signal, in-flight delivery, ACK matching, and status. `RuntimeSupervisor` stops the `DispatcherSupervisor`, which awaits all worker joins. A worker in `Blocked` state is not retried; network failures remain in capped infinite reconnect. Authentication remains `auth -> auth_result -> device_list -> Ready`.
 
+Phase 2-B Bluetooth uses this same target-scoped behavior. A local Bluetooth fixture verifies A/B receive the same `bluetooth` envelope, A ACK does not complete B, and an unacknowledged target reconnects with the original sequence and payload.
+
 Local Phase 1.75-C integration tests exercise two independent listeners, same-envelope delivery, target-local ACK/reconnect recovery, profile replacement/removal, rate-limit classification, heartbeat/pong observation, missing-pong reconnect, and permanent auth failure.

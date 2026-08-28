@@ -38,12 +38,23 @@ impl<B: BleScanner, C: ClassicBluetoothScanner> BluetoothCollector<B, C> {
     pub fn scan_once(&self) -> Result<CollectorEvent, BluetoothError> {
         let started = Instant::now();
         let result = self.scan();
-        let mut observations = result.ble.unwrap_or_default();
-        observations.extend(result.classic.unwrap_or_default());
+        let BluetoothScanResult {
+            ble,
+            classic,
+            ble_available,
+            classic_available,
+        } = result;
+        if ble.is_err() && classic.is_err() {
+            return Err(BluetoothError::Unavailable(
+                "BLE and Classic Bluetooth scanners both failed".into(),
+            ));
+        }
+        let mut observations = ble.unwrap_or_default();
+        observations.extend(classic.unwrap_or_default());
         let snapshot = BluetoothSnapshot {
             observations: merge_observations(observations, self.allow_cross_transport_merge),
-            ble_available: result.ble_available,
-            classic_available: result.classic_available,
+            ble_available,
+            classic_available,
             scan_duration_ms: started.elapsed().as_millis() as u64,
         };
         Ok(CollectorEvent {
@@ -96,6 +107,7 @@ mod tests {
             service_uuids: vec![],
             manufacturer_data: vec![],
             service_data: vec![],
+            raw_advertisement_sections: vec![],
             connectable: None,
             class_of_device: None,
             appearance: None,
@@ -124,6 +136,23 @@ mod tests {
         );
         let event = collector.scan_once().unwrap();
         assert_eq!(event.data["observations"][0]["transport"], "classic");
+    }
+    #[test]
+    fn classic_failure_keeps_ble_transport() {
+        let collector = BluetoothCollector::new(
+            MockBle(Ok(vec![obs(BluetoothTransport::Ble, 1)])),
+            MockClassic(Err(BluetoothError::Unavailable("classic".into()))),
+        );
+        let event = collector.scan_once().unwrap();
+        assert_eq!(event.data["observations"][0]["transport"], "ble");
+    }
+    #[test]
+    fn both_sources_failed_returns_error() {
+        let collector = BluetoothCollector::new(
+            MockBle(Err(BluetoothError::Unavailable("ble".into()))),
+            MockClassic(Err(BluetoothError::Unavailable("classic".into()))),
+        );
+        assert!(collector.scan_once().is_err());
     }
     #[test]
     fn explicit_cross_transport_merge_is_dual() {

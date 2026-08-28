@@ -6,7 +6,7 @@ Read this file, `ARCHITECTURE.md`, and `DEVELOPMENT.md` before changes. For tran
 
 ## Current state
 
-Phase 2-A is implemented and locally validated. Windows WLAN BSS scanning, normalized observations, Runtime-owned periodic scheduling, local Runtime-to-delivery integration, recovery coverage, UI status, and real hardware scanning are complete. Real backend Wi-Fi upload remains unverified because no user Token was available in the current process environment.
+Phase 2-A is implemented and locally validated. Phase 2-B Windows BLE + Classic Bluetooth is complete locally: unified scanning, Runtime, delivery, multi-server recovery, raw AD preservation, UI, tests, and real hardware probe all pass. Real backend upload remains intentionally untested.
 
 ## Completed
 
@@ -25,7 +25,11 @@ Phase 2-A is implemented and locally validated. Windows WLAN BSS scanning, norma
 - Scan-completion notification callback; current provider uses a bounded 1500 ms wait after `WlanScan` before querying BSS cache.
 - Full authentication/encryption IE parsing and persisted scan history.
 - Full Tauri tray lifecycle and push-based UI status events.
-- BLE, Classic Bluetooth, Android, Linux, and macOS collectors.
+- Android, Linux, and macOS collectors.
+
+## Phase 2-B status
+
+Status: Complete. Windows BLE uses WinRT `BluetoothLEAdvertisementWatcher`; Classic Bluetooth uses native inquiry APIs. Both enter one `BluetoothCollector`, one `CollectorEvent(data_type="bluetooth")`, one `(device_id, "bluetooth")` sequence namespace, and the existing multi-target delivery pipeline. Runtime owns one Bluetooth worker with `bluetooth_enabled`, shared scan interval, dynamic configuration, source-failure isolation, and truthful status. Unknown BLE AD sections are retained as `source`, `ad_type`, and uppercase `data_hex`.
 
 ## Phase 2-A status
 
@@ -44,7 +48,7 @@ Status: Partial. All local code and test gates pass, and real Windows hardware s
 
 ## Next step
 
-Run the environment-only real backend Wi-Fi smoke test with user-provided `REMOTE_ENV_TEST_URL`, `REMOTE_ENV_TEST_DEVICE_ID`, `REMOTE_ENV_TEST_TOKEN`, and `REMOTE_ENV_TEST_SEQUENCE`, then clean all variables. If it succeeds, update this file and the changelog with the actual ACK evidence and mark Phase 2-A Complete. Do not start Phase 2-B in this session.
+Run the environment-only real backend Wi-Fi smoke test with user-provided `REMOTE_ENV_TEST_URL`, `REMOTE_ENV_TEST_DEVICE_ID`, `REMOTE_ENV_TEST_TOKEN`, and `REMOTE_ENV_TEST_SEQUENCE`, then clean all variables. If it succeeds, update this file and the changelog with the actual ACK evidence and mark Phase 2-A Complete. Do not start Phase 2-C in this session.
 
 ## Existing phase history
 

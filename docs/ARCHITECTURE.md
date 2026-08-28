@@ -61,7 +61,9 @@ Event completion is target-scoped: an event is complete only when every selected
 
 `crates/core/tests/phase175c.rs` drives the live `RuntimeSupervisor -> DispatcherSupervisor -> ServerWorker` chain against independent A/B listeners. It verifies dual readiness, identical event envelopes, target-local recovery, Single-to-Multi and Multi-to-Single transitions, profile replacement/removal, rate-limit isolation, heartbeat observation, missing-pong reconnect, ACK isolation, and authentication blocking. The phase is Complete after the local gates and standalone Python real-backend verification passed.
 
-## Phase 2-A Runtime integration
+## Phase 2-B Windows Bluetooth Collector
+
+Windows now has one unified Bluetooth collector: `BluetoothCollector -> BLE scanner + Classic Bluetooth scanner -> CollectorEvent(data_type="bluetooth")`. BLE uses WinRT `BluetoothLEAdvertisementWatcher` with active scanning, bounded callback collection, `Stop`, `RemoveReceived`, structured fields, and raw `DataSections()` preservation. Classic uses the native Bluetooth inquiry APIs. Runtime owns one Bluetooth worker, uses `bluetooth_enabled` and `scan_interval_seconds`, assigns the durable `(device_id, "bluetooth")` sequence, and routes through `upload_deliveries` and independent ServerWorkers. A/B local fixtures cover identical envelopes, ACK isolation, disconnect recovery, and sequence preservation. Unknown raw AD sections use `source`, `ad_type`, and uppercase `data_hex`; scan responses are distinguished when Windows reports them. Real Windows validation observed BLE and Classic available with 5 unique devices; the count is environment-dependent and is not used as the sole acceptance criterion.
 
 `RuntimeSupervisor::start_with_collector` starts an optional platform scan callback on a dedicated worker runtime. Scans run through `spawn_blocking`, on the configured `scan_interval_seconds`, and stop checks prevent new work after shutdown. A bounded 120-second timeout converts a hung scan into a Wi-Fi Error state; the Runtime continues and later cycles can retry. Runtime config updates apply `wifi_enabled` and the interval without restarting the process.
 

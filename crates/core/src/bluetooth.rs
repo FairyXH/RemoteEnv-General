@@ -21,6 +21,13 @@ pub struct ServiceData {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RawAdvertisementSection {
+    pub source: String,
+    pub ad_type: u8,
+    pub data_hex: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BluetoothObservation {
     pub address: String,
     pub transport: BluetoothTransport,
@@ -29,6 +36,7 @@ pub struct BluetoothObservation {
     pub service_uuids: Vec<String>,
     pub manufacturer_data: Vec<ManufacturerData>,
     pub service_data: Vec<ServiceData>,
+    pub raw_advertisement_sections: Vec<RawAdvertisementSection>,
     pub connectable: Option<bool>,
     pub class_of_device: Option<u32>,
     pub appearance: Option<u16>,

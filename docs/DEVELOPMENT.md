@@ -57,3 +57,7 @@ Run `cargo run -p remote-env-platform-windows --example windows_wifi_scan` on a 
 
 The local end-to-end Wi-Fi fixture is `cargo test -p remote-env-core --test phase2a`. It uses a mock snapshot provider and a real local WebSocket fixture. The environment-only real backend smoke test additionally requires `REMOTE_ENV_REAL_TEST=1`, `REMOTE_ENV_TEST_URL`, `REMOTE_ENV_TEST_DEVICE_ID`, `REMOTE_ENV_TEST_TOKEN`, and an explicit `REMOTE_ENV_TEST_SEQUENCE`.
 
+## Windows Bluetooth validation
+
+Run `cargo run -p remote-env-platform-windows --example windows_bluetooth_scan`. The probe performs one unified BLE + Classic scan and prints only capability, aggregate count, and duration. The local Phase 2-B fixture is `crates/core/tests/phase2b.rs`. It covers one Bluetooth event through Runtime sequence allocation, `upload_deliveries`, local WebSocket ACK completion, dynamic `bluetooth_enabled` enable/disable without a second worker, and two-server target-scoped ACK isolation. Its recovery path closes one server after an unacknowledged upload and verifies the same envelope, device ID, data type, sequence, and payload are resent. No real backend credentials are used.
+

@@ -79,6 +79,7 @@ impl ClassicBluetoothScanner for NativeClassicBluetoothScanner {
                         service_uuids: Vec::new(),
                         manufacturer_data: Vec::new(),
                         service_data: Vec::new(),
+                        raw_advertisement_sections: Vec::new(),
                         connectable: None,
                         class_of_device: Some(info.ulClassofDevice),
                         appearance: None,
@@ -105,6 +106,17 @@ impl ClassicBluetoothScanner for NativeClassicBluetoothScanner {
         Ok(result)
     }
     fn available(&self) -> bool {
+        let mut radio = null_mut();
+        let params = BLUETOOTH_FIND_RADIO_PARAMS {
+            dwSize: size_of::<BLUETOOTH_FIND_RADIO_PARAMS>() as u32,
+        };
+        let handle = unsafe { BluetoothFindFirstRadio(&params, &mut radio) };
+        if handle.is_null() {
+            return false;
+        }
+        unsafe {
+            BluetoothFindRadioClose(handle);
+        }
         true
     }
 }

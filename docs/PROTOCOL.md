@@ -30,6 +30,7 @@ Time is Unix milliseconds. `data_type` must match `^[a-z][a-z0-9_.-]{0,63}$`.
 - Multi-target delivery storage and live dispatcher wiring are implemented in the Phase 1.75-C runtime path.
 - Target selection is immutable after an event is persisted: changing mode or disabling a profile affects future events only. Removing a server should cancel its pending deliveries rather than leave them indefinitely pending.
 - Runtime event persistence now creates one `upload_deliveries` row per immutable target set, reusing the same global sequence for every target.
+- Bluetooth uses the same envelope with `data_type: "bluetooth"`; BLE and Classic observations are payload fields, not separate protocol types. The durable sequence namespace is `(device_id, "bluetooth")`.
 - Event completion is true only when all target deliveries are `completed` or `cancelled`; `blocked` remains incomplete and visible.
 
 ## Documentation difference
@@ -39,3 +40,5 @@ Server docs call the success response a generic data result. Runtime code establ
 ## Phase 1.75-C test evidence
 
 Real backend validation passed via the standalone Python client against the corrected endpoint. The client completed TLS WebSocket connection, collector authentication, successful `auth_result`, `device_list` reception, timestamped `heartbeat`/`pong`, one marked `environment_data` upload, and a matching successful `data_result` ACK. Credentials were provided only through process environment variables and were removed after testing.
+
+Phase 2-B local fixtures reuse this exact `environment_data`/`data_result` contract for Bluetooth and do not contact the real backend.

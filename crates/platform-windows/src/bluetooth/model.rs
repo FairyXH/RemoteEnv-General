@@ -55,12 +55,17 @@ pub fn merge_observations(
                     .retain(|value| value.company_id != next.company_id);
                 existing.manufacturer_data.push(next);
             }
-            for next in item.service_data {
-                existing
-                    .service_data
-                    .retain(|value| value.uuid != next.uuid);
-                existing.service_data.push(next);
-            }
+            existing.service_data.extend(item.service_data);
+            existing
+                .raw_advertisement_sections
+                .extend(item.raw_advertisement_sections);
+            existing.raw_advertisement_sections.sort_by(|a, b| {
+                a.source
+                    .cmp(&b.source)
+                    .then(a.ad_type.cmp(&b.ad_type))
+                    .then(a.data_hex.cmp(&b.data_hex))
+            });
+            existing.raw_advertisement_sections.dedup();
         } else {
             merged.push(item);
         }

@@ -1,6 +1,8 @@
 use super::error::BluetoothError;
 use super::model::format_bluetooth_address;
-use remote_env_core::bluetooth::{BluetoothObservation, BluetoothTransport};
+use remote_env_core::bluetooth::{
+    BluetoothObservation, BluetoothTransport, RawAdvertisementSection,
+};
 use std::sync::mpsc::sync_channel;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use windows::Devices::Bluetooth::Advertisement::{
@@ -18,6 +20,7 @@ pub struct BleAdvertisement {
     pub service_uuids: Vec<String>,
     pub manufacturer_data: Vec<remote_env_core::bluetooth::ManufacturerData>,
     pub service_data: Vec<remote_env_core::bluetooth::ServiceData>,
+    pub raw_advertisement_sections: Vec<RawAdvertisementSection>,
     pub connectable: Option<bool>,
     pub appearance: Option<u16>,
     pub tx_power: Option<i16>,
@@ -85,7 +88,13 @@ pub fn parse_advertisement(raw: &[u8]) -> BleAdvertisement {
                 }
             }
             0x01 if !data.is_empty() => result.connectable = Some(data[0] & 0x04 != 0),
-            _ => {}
+            _ => result
+                .raw_advertisement_sections
+                .push(RawAdvertisementSection {
+                    source: "advertisement".into(),
+                    ad_type,
+                    data_hex: data.iter().map(|byte| format!("{byte:02X}")).collect(),
+                }),
         }
         offset += length;
     }
@@ -155,6 +164,30 @@ impl BleScanner for NativeBleScanner {
                     }
                 }
             }
+            let source = if args.IsScanResponse().unwrap_or(false) {
+                "scan_response"
+            } else {
+                "advertisement"
+            };
+            let mut raw_advertisement_sections = Vec::new();
+            if let Ok(sections) = advertisement.DataSections() {
+                for index in 0..sections.Size()? {
+                    let Ok(section) = sections.GetAt(index) else {
+                        continue;
+                    };
+                    let (Ok(ad_type), Ok(buffer)) = (section.DataType(), section.Data()) else {
+                        continue;
+                    };
+                    let Ok(data) = read_buffer(buffer) else {
+                        continue;
+                    };
+                    raw_advertisement_sections.push(RawAdvertisementSection {
+                        source: source.into(),
+                        ad_type,
+                        data_hex: data.iter().map(|byte| format!("{byte:02X}")).collect(),
+                    });
+                }
+            }
             let event = BluetoothObservation {
                 address: format_bluetooth_address(args.BluetoothAddress()?),
                 transport: BluetoothTransport::Ble,
@@ -167,6 +200,7 @@ impl BleScanner for NativeBleScanner {
                 service_uuids,
                 manufacturer_data,
                 service_data: Vec::new(),
+                raw_advertisement_sections,
                 connectable: args.IsConnectable().ok(),
                 class_of_device: None,
                 appearance: None,
@@ -209,7 +243,7 @@ mod tests {
         let raw = [
             2, 0x01, 0x06, 5, 0x09, b'T', b'a', b'g', b'1', 3, 0x0A, 0xC3, 0x00, 5, 0xFF, 0x4C,
             0x00, 0x01, 0x02, 3, 0x19, 0x34, 0x12, 4, 0x16, 0xAA, 0xFE, 0x01, 5, 0x03, 0x0D, 0x18,
-            0x0F, 0x18, 8, 0xFF, 0x01,
+            0x0F, 0x18, 4, 0x20, 0xDE, 0xAD, 0xBE,
         ];
         let parsed = parse_advertisement(&raw);
         assert_eq!(parsed.name.as_deref(), Some("Tag1"));
@@ -218,5 +252,12 @@ mod tests {
         assert_eq!(parsed.manufacturer_data[0].company_id, 0x004C);
         assert_eq!(parsed.service_data[0].uuid, "FEAA");
         assert_eq!(parsed.service_uuids, vec!["180D", "180F"]);
+        assert_eq!(parsed.raw_advertisement_sections[0].ad_type, 0x20);
+        assert_eq!(parsed.raw_advertisement_sections[0].data_hex, "DEADBE");
+        let event = serde_json::json!({"observations": [{"raw_advertisement_sections": parsed.raw_advertisement_sections}]});
+        assert_eq!(
+            event["observations"][0]["raw_advertisement_sections"][0]["data_hex"],
+            "DEADBE"
+        );
     }
 }
