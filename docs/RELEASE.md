@@ -60,4 +60,4 @@ Set-Location ../..
 ./scripts/build-release.ps1
 ```
 
-最后只验证 `Release/Windows/` 中的 artifact。当前环境可以完成源码、UI 和 Rust 构建验证；没有独立干净 Windows 机器时，不得把本机验证表述为 clean-machine 验证。
+最后只验证 `Release/Windows/` 中的 artifact。当前环境已完成源码、UI、Tauri 打包和进程级启动/停止验证；无可视桌面自动化通道，不能将其表述为安装器窗口、Tray 点击、真实硬件按钮或 clean-machine 验证。

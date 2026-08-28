@@ -10,7 +10,10 @@
 - Added Tauri runtime status event push, close-to-tray behavior, tray lifecycle actions, graceful Runtime shutdown, and WebSocket/auth/heartbeat server testing.
 - Added explicit per-server Device ID input and used it for persistent authentication and upload identity.
 - Added persistent server connection action, immediate Wi-Fi/Bluetooth scan actions, and JSON detail dialogs for the latest scan.
-- Server test now completes after authentication and device list instead of waiting indefinitely for a separate heartbeat response.
+- Added runtime status fields for heartbeat liveness and latest heartbeat time; connected server cards show green status.
+- Moved immediate native scans to Tauri blocking worker threads to keep the UI responsive.
+- Added processed list-style Wi-Fi/Bluetooth detail dialogs instead of raw JSON-only output.
+- Production Windows executable now uses the GUI subsystem so launch does not open a command window.
 - Set a restrictive local-resource CSP for the Tauri WebView.
 
 
