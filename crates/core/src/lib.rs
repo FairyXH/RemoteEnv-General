@@ -6,6 +6,7 @@ pub mod queue;
 pub mod runtime;
 pub mod state;
 pub mod transport;
+pub mod worker;
 
 #[derive(Debug, thiserror::Error)]
 pub enum CoreError {

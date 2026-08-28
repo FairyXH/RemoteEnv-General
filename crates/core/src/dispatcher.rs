@@ -32,6 +32,17 @@ pub struct ServerTargetStatus {
     pub blocked: usize,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct ServerWorkerStatus {
+    pub profile_id: String,
+    pub connection: ConnectionState,
+    pub pending: usize,
+    pub in_flight: usize,
+    pub blocked: usize,
+    pub uploaded: u64,
+    pub failed: u64,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum DispatcherError {
     #[error("state error: {0}")]
@@ -107,6 +118,13 @@ impl UploadDispatcher {
         Ok(self.store.cancel_target(server_id)?)
     }
 
+    pub fn selected_targets(&self, config: &ClientConfig) -> Vec<String> {
+        self.resolve_targets(config)
+            .into_iter()
+            .map(|profile| profile.id.clone())
+            .collect()
+    }
+
     pub fn target_status(
         &self,
         profile_id: &str,
@@ -122,7 +140,7 @@ impl UploadDispatcher {
     }
 
     pub fn retry_delay(attempt: u32) -> Duration {
-        Duration::from_secs(1_u64.checked_shl(attempt.min(4)).unwrap_or(30))
+        Duration::from_secs(1_u64.checked_shl(attempt.min(5)).unwrap_or(30))
             .min(Duration::from_secs(30))
     }
 

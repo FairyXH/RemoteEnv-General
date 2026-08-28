@@ -367,6 +367,30 @@ fn dispatcher_resolves_targets_and_acknowledges_only_the_selected_server() {
 }
 
 #[test]
+fn dispatcher_cancels_removed_target_and_caps_retry_delay() {
+    let dir = tempdir().unwrap();
+    let store = StateStore::open(dir.path().join("state.sqlite3")).unwrap();
+    let dispatcher = UploadDispatcher::new(store);
+    let mut config = ClientConfig::default();
+    config.server_profiles = vec![remote_env_core::config::ServerProfile {
+        id: "removed".into(),
+        name: "Removed".into(),
+        url: "ws://removed".into(),
+        token: "x".into(),
+        enabled: true,
+    }];
+    config.active_server_id = Some("removed".into());
+    let envelope = EnvironmentEnvelope::new("device-a", "wifi", 1, serde_json::json!({}));
+    assert_eq!(dispatcher.persist_event(&config, &envelope).unwrap(), 1);
+    dispatcher.cancel_target("removed").unwrap();
+    assert_eq!(dispatcher.status("removed", "Stopped").unwrap().pending, 0);
+    assert_eq!(
+        remote_env_core::dispatcher::UploadDispatcher::retry_delay(99),
+        std::time::Duration::from_secs(30)
+    );
+}
+
+#[test]
 fn invalid_queue_capacity_is_rejected() {
     let dir = tempdir().unwrap();
     let store = StateStore::open(dir.path().join("state.sqlite3")).unwrap();
