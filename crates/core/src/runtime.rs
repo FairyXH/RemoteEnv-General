@@ -58,6 +58,7 @@ pub struct Runtime {
 
 pub struct RuntimeSupervisor {
     events: mpsc::Sender<CollectorEvent>,
+    config_updates: mpsc::Sender<ClientConfig>,
     status: watch::Receiver<RuntimeStatus>,
     stop: Option<tokio::sync::oneshot::Sender<()>>,
     thread: Option<JoinHandle<()>>,
@@ -71,6 +72,7 @@ impl RuntimeSupervisor {
             return Err(RuntimeError::Dispatcher(DispatcherError::NoTargets));
         }
         let (events, mut event_rx) = mpsc::channel::<CollectorEvent>(128);
+        let (config_updates, mut config_rx) = mpsc::channel::<ClientConfig>(16);
         let (status_tx, status) = watch::channel(RuntimeStatus::default());
         let (stop, mut stop_rx) = tokio::sync::oneshot::channel();
         let thread = std::thread::Builder::new()
@@ -81,21 +83,21 @@ impl RuntimeSupervisor {
                     let dispatcher = UploadDispatcher::new(store.clone());
                     let mut supervisor = DispatcherSupervisor::new(dispatcher.clone(), config.identity.clone(), Duration::from_secs(config.heartbeat_interval_seconds));
                     supervisor.apply_config(&config).await;
-                    let event_store = store.clone();
-                    let event_dispatcher = dispatcher.clone();
-                    let event_config = config.clone();
-                    let event_identity = config.identity.clone();
-                    let event_task = tokio::spawn(async move {
-                        while let Some(event) = event_rx.recv().await {
-                            let Ok(sequence) = event_store.next_sequence(&event_identity.device_id, &event.data_type) else { continue; };
-                            let envelope = EnvironmentEnvelope::new(event_identity.device_id.clone(), event.data_type, sequence, event.data);
-                            let _ = event_dispatcher.persist_event(&event_config, &envelope);
-                        }
-                    });
-                    tokio::select! {
-                        _ = &mut stop_rx => {},
-                        _ = async {
-                            loop {
+                    let mut current_config = config;
+                    let mut status_tick = tokio::time::interval(Duration::from_millis(20));
+                    loop {
+                        tokio::select! {
+                            _ = &mut stop_rx => break,
+                            Some(event) = event_rx.recv() => {
+                                let Ok(sequence) = store.next_sequence(&current_config.identity.device_id, &event.data_type) else { continue; };
+                                let envelope = EnvironmentEnvelope::new(current_config.identity.device_id.clone(), event.data_type, sequence, event.data);
+                                let _ = dispatcher.persist_event(&current_config, &envelope);
+                            }
+                            Some(updated_config) = config_rx.recv() => {
+                                supervisor.apply_config(&updated_config).await;
+                                current_config = updated_config;
+                            }
+                            _ = status_tick.tick() => {
                                 let servers = supervisor.statuses();
                                 let mut snapshot = RuntimeStatus::default();
                                 snapshot.connection = if servers.iter().any(|s| s.connection == ConnectionState::Ready) { ConnectionState::Ready } else { ConnectionState::Reconnecting };
@@ -104,11 +106,9 @@ impl RuntimeSupervisor {
                                 snapshot.in_flight = snapshot.servers.iter().map(|s| s.in_flight).sum();
                                 snapshot.blocked = snapshot.servers.iter().map(|s| s.blocked).sum();
                                 let _ = status_tx.send(snapshot);
-                                tokio::time::sleep(Duration::from_millis(100)).await;
                             }
-                        } => {}
+                        }
                     }
-                    event_task.abort();
                     supervisor.stop().await;
                     let mut snapshot = RuntimeStatus::default();
                     snapshot.connection = ConnectionState::Stopped;
@@ -118,6 +118,7 @@ impl RuntimeSupervisor {
             .map_err(|error| RuntimeError::Thread(error.to_string()))?;
         Ok(Self {
             events,
+            config_updates,
             status,
             stop: Some(stop),
             thread: Some(thread),
@@ -132,6 +133,12 @@ impl RuntimeSupervisor {
 
     pub fn status(&self) -> RuntimeStatus {
         self.status.borrow().clone()
+    }
+
+    pub fn update_config(&self, config: ClientConfig) -> Result<(), RuntimeError> {
+        self.config_updates
+            .blocking_send(config)
+            .map_err(|_| RuntimeError::EventChannelClosed)
     }
 
     pub fn stop(&mut self) {
