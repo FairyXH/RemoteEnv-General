@@ -56,11 +56,14 @@ Phase 1.5 implementation is partial: Core persistence, queue, protocol handling,
 - UI reads `get_runtime_status`; current refresh is a low-rate fallback until Tauri event push is added.
 - Tray is not implemented yet.
 
-## Phase 1.75
+## Phase 1.75-B status
 
-- `ServerProfile { id, name, url, token, enabled }` and `ServerMode::{Single, Multi}` are modeled in Core configuration. A single global sequence remains authoritative across server targets; this matches the server's per-device/data-type ordering model and avoids generating divergent event identities.
-- Delivery-state schema groundwork exists in SQLite as `upload_deliveries`; the active supervisor still uses the original queue and is not yet multi-server dispatch.
-- Runtime stop now races reconnect backoff against the stop signal.
-- Real backend smoke test is explicit and environment-only; it is ignored by default.
-- Windows WLAN research is recorded in `docs/WINDOWS_WIFI_RESEARCH.md`.
-- Status: Partial. Multi-target dispatcher, event push, tray, real backend execution, and full reconnect fixture remain.
+- Status: Partial.
+- Latest dispatcher commit: `ff1ab7c feat: add target scoped upload dispatcher`; module export follow-up: `e6c08dd chore: export upload dispatcher module`.
+- `ServerProfile`, `ServerMode`, immutable target resolution, and global sequence semantics are implemented.
+- `UploadDispatcher` now persists target-scoped delivery rows and exposes claim, exact ACK, recovery, block, cancel, and per-target statistics operations.
+- SQLite migration is additive: existing `upload_queue` and sequence data are preserved; `upload_deliveries` is created if absent.
+- Live per-server WebSocket supervisors, dispatcher wiring in `RuntimeSupervisor`, independent heartbeat/reconnect, server CRUD commands, and multi-server end-to-end fixture are not implemented yet.
+- Real backend smoke test was not executed; no credentials are stored in the repository.
+- Next: wire one supervisor per selected ServerProfile, then run local single/multi/reconnect fixtures before real backend smoke testing.
+

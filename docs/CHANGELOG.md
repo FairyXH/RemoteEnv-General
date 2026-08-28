@@ -4,10 +4,10 @@
 
 ### Phase 1.5
 
-- Added long-lived Core `RuntimeSupervisor` with bounded event channel, dedicated Tokio worker, reconnect loop, queue recovery, and Tauri lifecycle commands.
-- Added local WebSocket fixture coverage for authentication, device list, upload, exact ACK, and disconnect.
-- UI now reads `get_runtime_status`; tray and push-based Tauri events remain deferred.
-- Real platform collectors remain `Not implemented`.
+- Added target-scoped `UploadDispatcher` groundwork and additive SQLite delivery storage for Single/Multi target resolution.
+- Added explicit environment-only real backend smoke-test skeleton; it remains ignored by default and was not executed in this phase.
+- Added Windows WLAN research notes for Phase 2.
+- Phase 1.75-B remains partial: live per-server dispatch and reconnect fixtures are next.
 
 ### Added
 
