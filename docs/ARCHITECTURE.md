@@ -45,8 +45,12 @@ Collectors must not call WebSocket APIs directly. UI reads application status sn
 
 ## Multi-server configuration
 
-`ClientConfig` contains `ServerProfile` records (`id`, `name`, `url`, `token`, `enabled`) and `ServerMode::{Single, Multi}`. Single mode selects `active_server_id`; Multi mode selects all enabled profiles. Tokens are persisted with the local configuration store but are never included in status snapshots or logs. The delivery table has been added as schema groundwork; the active runtime still uses the legacy single queue until target dispatch is completed.
+- `ClientConfig` contains `ServerProfile` records (`id`, `name`, `url`, `token`, `enabled`) and `ServerMode::{Single, Multi}`. Single mode selects `active_server_id`; Multi mode selects all enabled profiles. Tokens are persisted with the local configuration store but are never included in status snapshots or logs. The runtime now persists each event only to `upload_deliveries`; the legacy `upload_queue` is retained solely for compatibility and direct legacy APIs.
 
 ## Phase 1.75-B dispatcher
 
-`UploadDispatcher` resolves the target set once per event and stores one `upload_deliveries` row per selected server. The global `(device_id, data_type, sequence)` is reused for all targets. ACK, recovery, block, cancel, and status operations are scoped by `target_id`; the dispatcher does not yet own live per-profile WebSocket workers.
+## Phase 1.75-C runtime integration
+
+`RuntimeSupervisor -> DispatcherSupervisor -> one ServerWorker per selected ServerProfile`. Each worker owns its WebSocket session, heartbeat interval, reconnect backoff, stop signal, in-flight delivery, and status watch channel. Events allocate one durable global sequence and create one target delivery per selected server. ACK and recovery are target-scoped. Removed targets are stopped and their pending/in-flight deliveries are cancelled. Authentication and fatal protocol errors move only that worker to `Blocked`; transport errors reconnect only that target.
+
+Event completion is target-scoped: an event is complete only when every selected delivery is acknowledged or explicitly cancelled. A blocked delivery remains incomplete and visible.

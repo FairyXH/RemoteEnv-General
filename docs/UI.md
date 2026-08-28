@@ -6,7 +6,7 @@
 
 ## First Windows surface
 
-The compact shell includes live Core connection state, collector states/counts, queue depth, accepted-upload statistics, and a Start Runtime command. In browser preview or before Tauri is running, it honestly falls back to unavailable/offline values. It never presents mock events as hardware scans.
+The UI reads `get_runtime_status` and renders the real `servers` list, including each profile's connection state and target delivery counts. Collector capabilities remain `Not implemented`; no synthetic scan data is shown.
 
 ## Tray
 

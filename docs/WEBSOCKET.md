@@ -30,4 +30,6 @@ Queue uses bounded SQLite durable rows. `sequence_rejected` blocks the affected 
 
 Phase 1.75-B introduces target-scoped delivery records without duplicating the event payload: one global event envelope is represented by one `upload_deliveries` row per selected server. Single mode selects `active_server_id`; Multi mode selects enabled profiles. Each future live server worker must own its own WebSocket state, heartbeat, reconnect backoff, in-flight delivery, and ACK processing. A failure or blocked sequence for one target must not mutate other target rows.
 
-Phase 1.75-B adds target-scoped delivery primitives, but live per-server supervisors and independent connections are not implemented yet.
+## Phase 1.75-C workers
+
+Each selected target has its own `ServerWorker`: independent WebSocket, heartbeat, reconnect backoff, stop signal, in-flight delivery, ACK matching, and status. `RuntimeSupervisor` stops the `DispatcherSupervisor`, which awaits all worker joins. A worker in `Blocked` state is not retried; network failures remain in capped infinite reconnect. Authentication remains `auth -> auth_result -> device_list -> Ready`.

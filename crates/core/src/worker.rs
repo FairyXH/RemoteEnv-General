@@ -177,7 +177,10 @@ impl ServerWorker {
             .await
             .map_err(|_| WorkerError::Transport)?;
         self.publish(ConnectionState::Authenticating);
-        let auth_result = next_json(&mut socket).await?;
+        let auth_result = tokio::select! {
+            _ = &mut *stop => return Ok(()),
+            result = next_json(&mut socket) => result?,
+        };
         if auth_result["type"] != "auth_result" || auth_result["success"] != true {
             return Err(WorkerError::Blocked(
                 auth_result["message"]
@@ -186,7 +189,11 @@ impl ServerWorker {
                     .to_string(),
             ));
         }
-        if next_json(&mut socket).await?["type"] != "device_list" {
+        let device_list = tokio::select! {
+            _ = &mut *stop => return Ok(()),
+            result = next_json(&mut socket) => result?,
+        };
+        if device_list["type"] != "device_list" {
             return Err(WorkerError::Blocked(
                 "device_list required after auth_result".into(),
             ));

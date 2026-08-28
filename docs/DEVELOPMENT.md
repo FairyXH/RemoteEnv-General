@@ -43,4 +43,9 @@ cargo test -p remote-env-core
 5. Update `CONTEXT.md` and `CHANGELOG.md` after every completed phase.
 6. Hardware claims need real API/device evidence, not compilation alone.
 
-Phase 1.75 uses a dedicated Tokio runtime thread and bounded event channel. `RuntimeSupervisor` owns reconnect and persistence recovery; Tauri owns lifecycle and commands. Real backend smoke tests are ignored by default and read `REMOTE_ENV_REAL_TEST`, `REMOTE_ENV_TEST_URL`, `REMOTE_ENV_TEST_DEVICE_ID`, and `REMOTE_ENV_TEST_TOKEN` only from the process environment. Never store these values in the repository.
+## Phase 1.75-C runtime integration
+
+- `RuntimeSupervisor` no longer enqueues new events into legacy `upload_queue`; it allocates the global sequence and calls `UploadDispatcher.persist_event`.
+- `DispatcherSupervisor` owns target selection and worker lifecycle. Profile removal stops the worker and cancels its existing deliveries; URL/token changes stop, recover, and replace the worker.
+- `ServerWorker` has an independent stop-aware WebSocket loop, heartbeat, reconnect backoff, strict target ACK, in-flight recovery, and `Blocked` authentication state.
+
