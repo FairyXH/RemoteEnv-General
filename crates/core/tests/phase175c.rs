@@ -21,6 +21,7 @@ struct TestServer {
     ack: Arc<AtomicBool>,
     auth_failure: Arc<AtomicBool>,
     heartbeat_count: Arc<AtomicUsize>,
+    pong_enabled: Arc<AtomicBool>,
     rate_limited: Arc<AtomicBool>,
     disconnect: Arc<Notify>,
     changed: Arc<Notify>,
@@ -38,6 +39,7 @@ impl TestServer {
         let disconnect = Arc::new(Notify::new());
         let auth_failure = Arc::new(AtomicBool::new(false));
         let heartbeat_count = Arc::new(AtomicUsize::new(0));
+        let pong_enabled = Arc::new(AtomicBool::new(true));
         let rate_limited = Arc::new(AtomicBool::new(false));
         let changed = Arc::new(Notify::new());
         let task_state = (
@@ -50,6 +52,7 @@ impl TestServer {
             auth_failure.clone(),
             changed.clone(),
             heartbeat_count.clone(),
+            pong_enabled.clone(),
             rate_limited.clone(),
         );
         tokio::spawn(async move {
@@ -106,7 +109,7 @@ impl TestServer {
                             Some("environment_data") => {
                                 state.0.lock().unwrap().push(value.clone());
                                 state.7.notify_waiters();
-                                if state.9.load(Ordering::SeqCst) {
+                                if state.10.load(Ordering::SeqCst) {
                                     let _ = socket
                                         .send(Message::Text(
                                             r#"{"type":"error","code":"rate_limited","message":"slow down","retryable":true}"#.into(),
@@ -122,9 +125,11 @@ impl TestServer {
                             }
                             Some("heartbeat") => {
                                 state.8.fetch_add(1, Ordering::SeqCst);
-                                let _ = socket
-                                    .send(Message::Text(r#"{"type":"pong"}"#.into()))
-                                    .await;
+                                if state.9.load(Ordering::SeqCst) {
+                                    let _ = socket
+                                        .send(Message::Text(r#"{"type":"pong"}"#.into()))
+                                        .await;
+                                }
                             }
                             _ => {}
                         }
@@ -142,6 +147,7 @@ impl TestServer {
             disconnect,
             auth_failure,
             heartbeat_count,
+            pong_enabled,
             rate_limited,
             changed,
         }
@@ -179,6 +185,10 @@ impl TestServer {
 
     fn rate_limit(&self, enabled: bool) {
         self.rate_limited.store(enabled, Ordering::SeqCst);
+    }
+
+    fn pong(&self, enabled: bool) {
+        self.pong_enabled.store(enabled, Ordering::SeqCst);
     }
 }
 
@@ -484,6 +494,89 @@ async fn phase_175c_single_to_multi_and_rate_limit_keep_other_target_independent
             .as_deref(),
         Some("completed")
     );
+    runtime.stop();
+}
+
+#[tokio::test]
+async fn phase_175c_missing_pong_enters_reconnecting() {
+    let a = TestServer::start().await;
+    let b = TestServer::start().await;
+    let dir = tempdir().unwrap();
+    let store = StateStore::open(dir.path().join("state.sqlite3")).unwrap();
+    let identity = DeviceIdentity {
+        device_id: "heartbeat-device".into(),
+        device_name: "fixture".into(),
+        platform: "test".into(),
+        platform_version: "1".into(),
+        client_version: "1".into(),
+        hardware: None,
+    };
+    let mut config = config(identity, &a, &b);
+    config.server_profiles.truncate(1);
+    config.heartbeat_interval_seconds = 1;
+    let mut runtime = RuntimeSupervisor::start(config, store).unwrap();
+    wait_ready(&runtime, 1).await;
+    a.pong(false);
+    wait_connection(&runtime, "a", "Reconnecting").await;
+    runtime.stop();
+}
+
+#[tokio::test]
+async fn phase_175c_multi_to_single_b_stops_a_and_keeps_b() {
+    let a = TestServer::start().await;
+    let b = TestServer::start().await;
+    let dir = tempdir().unwrap();
+    let store = StateStore::open(dir.path().join("state.sqlite3")).unwrap();
+    let identity = DeviceIdentity {
+        device_id: "mode-device".into(),
+        device_name: "fixture".into(),
+        platform: "test".into(),
+        platform_version: "1".into(),
+        client_version: "1".into(),
+        hardware: None,
+    };
+    let mut multi = config(identity, &a, &b);
+    multi.server_mode = ServerMode::Multi;
+    let mut runtime = RuntimeSupervisor::start(multi.clone(), store).unwrap();
+    wait_ready(&runtime, 2).await;
+    let mut single = multi;
+    single.server_mode = ServerMode::Single;
+    single.active_server_id = Some("b".into());
+    runtime.update_config(single).unwrap();
+    wait_for_profiles(&runtime, &["b"]).await;
+    runtime.submit(event("single-b")).unwrap();
+    b.wait_for(|server| server.sequences().contains(&1)).await;
+    runtime.stop();
+}
+
+#[tokio::test]
+async fn phase_175c_ack_isolation_leaves_b_pending_until_b_ack() {
+    let a = TestServer::start().await;
+    let b = TestServer::start().await;
+    a.ack.store(false, Ordering::SeqCst);
+    let dir = tempdir().unwrap();
+    let store = StateStore::open(dir.path().join("state.sqlite3")).unwrap();
+    let identity = DeviceIdentity {
+        device_id: "ack-device".into(),
+        device_name: "fixture".into(),
+        platform: "test".into(),
+        platform_version: "1".into(),
+        client_version: "1".into(),
+        hardware: None,
+    };
+    let mut config = config(identity, &a, &b);
+    config.server_mode = ServerMode::Multi;
+    let mut runtime = RuntimeSupervisor::start(config, store.clone()).unwrap();
+    wait_ready(&runtime, 2).await;
+    runtime.submit(event("ack-isolation")).unwrap();
+    a.wait_for(|server| server.sequences().contains(&1)).await;
+    b.wait_for(|server| server.sequences().contains(&1)).await;
+    wait_delivery_status(&store, "a", "ack-device", "wifi", 1, "in_flight").await;
+    wait_delivery_status(&store, "b", "ack-device", "wifi", 1, "completed").await;
+    assert!(!store.event_complete("ack-device", "wifi", 1).unwrap());
+    a.ack.store(true, Ordering::SeqCst);
+    a.disconnect.notify_one();
+    wait_complete(&store, "ack-device", "wifi", 1).await;
     runtime.stop();
 }
 

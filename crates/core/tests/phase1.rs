@@ -309,10 +309,8 @@ async fn real_backend_smoke_test_uses_only_runtime_environment_configuration() {
         manager.run_once(&url, &token, &identity, &queue),
     )
     .await;
-    assert!(
-        result.is_ok(),
-        "real backend did not complete upload/ACK window"
-    );
+    let result = result.expect("real backend smoke timed out");
+    assert!(result.is_ok(), "real backend smoke failed: {result:?}");
     assert_eq!(queue.pending_count().unwrap(), 0);
 }
 
