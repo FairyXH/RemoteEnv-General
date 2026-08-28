@@ -9,7 +9,7 @@ use serde::Serialize;
 use serde_json::Value;
 use std::time::Duration;
 use tokio::sync::{oneshot, watch};
-use tokio_tungstenite::{connect_async, tungstenite::Message};
+use tokio_tungstenite::{connect_async_tls_with_config, tungstenite::Message, Connector};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ServerWorkerStatus {
@@ -17,6 +17,7 @@ pub struct ServerWorkerStatus {
     pub connection: ConnectionState,
     pub heartbeat_alive: bool,
     pub last_heartbeat_ms: Option<i64>,
+    pub last_error: Option<String>,
     pub pending: usize,
     pub in_flight: usize,
     pub blocked: usize,
@@ -31,6 +32,7 @@ impl ServerWorkerStatus {
             connection: ConnectionState::Stopped,
             heartbeat_alive: false,
             last_heartbeat_ms: None,
+            last_error: None,
             pending: 0,
             in_flight: 0,
             blocked: 0,
@@ -44,6 +46,8 @@ impl ServerWorkerStatus {
 pub enum WorkerError {
     #[error("worker stopped")]
     Stopped,
+    #[error("connection failed: {0}")]
+    Connection(String),
     #[error("worker transport failed")]
     Transport,
     #[error("worker protocol failed")]
@@ -148,6 +152,15 @@ impl ServerWorker {
         loop {
             self.publish(ConnectionState::Connecting);
             let result = self.run_connection(&mut stop).await;
+            if !matches!(result, Err(WorkerError::Stopped)) {
+                self.status.last_error = None;
+            }
+            if let Err(error) = &result {
+                if !matches!(error, WorkerError::Stopped) {
+                    self.status.last_error = Some(error.to_string());
+                    let _ = self.status_tx.send(self.status.clone());
+                }
+            }
             if matches!(result, Err(WorkerError::Stopped)) {
                 self.publish(ConnectionState::Stopped);
                 return;
@@ -174,10 +187,26 @@ impl ServerWorker {
         &mut self,
         stop: &mut oneshot::Receiver<()>,
     ) -> Result<(), WorkerError> {
-        let connect = connect_async(&self.profile.url);
+        let connect = connect_async_tls_with_config(
+            &self.profile.url,
+            None,
+            false,
+            if self.profile.url.trim_start().starts_with("wss://") {
+                Some(Connector::NativeTls(
+                    native_tls::TlsConnector::builder()
+                        .danger_accept_invalid_certs(true)
+                        .danger_accept_invalid_hostnames(true)
+                        .build()
+                        .map_err(|error| WorkerError::Blocked(format!("TLS 配置失败: {error}")))?
+                        .into(),
+                ))
+            } else {
+                None
+            },
+        );
         let (mut socket, _) = tokio::select! {
             _ = &mut *stop => return Err(WorkerError::Stopped),
-            result = connect => result.map_err(|_| WorkerError::Transport)?,
+            result = connect => result.map_err(|error| WorkerError::Connection(format!("连接 {url}: {error}", url = self.profile.url)))?,
         };
         self.publish(ConnectionState::Connected);
         let auth = AuthFrame::collector(
@@ -199,21 +228,14 @@ impl ServerWorker {
             result = next_json(&mut socket) => result?,
         };
         if auth_result["type"] != "auth_result" || auth_result["success"] != true {
-            return Err(WorkerError::Blocked(
-                auth_result["message"]
-                    .as_str()
-                    .unwrap_or("authentication failed")
-                    .to_string(),
-            ));
+            return Err(WorkerError::Blocked(format!("服务器认证拒绝: {}", auth_result)));
         }
         let device_list = tokio::select! {
             _ = &mut *stop => return Err(WorkerError::Stopped),
             result = next_json(&mut socket) => result?,
         };
         if device_list["type"] != "device_list" {
-            return Err(WorkerError::Blocked(
-                "device_list required after auth_result".into(),
-            ));
+            return Err(WorkerError::Blocked(format!("服务器协议拒绝: 认证后未收到 device_list，实际响应: {}", device_list)));
         }
         self.publish(ConnectionState::Ready);
         self.heartbeat_monitor.mark_pong();
@@ -263,9 +285,9 @@ impl ServerWorker {
                         }
                         ServerEvent::SequenceRejected | ServerEvent::FatalError => {
                             if let Some((id, _)) = in_flight.take() { self.dispatcher.block(&self.profile.id, id)?; }
-                            return Err(WorkerError::Blocked(value["message"].as_str().unwrap_or("server rejected upload").into()));
+                            return Err(WorkerError::Blocked(format!("服务器拒绝连接/上传: {}", value)));
                         }
-                        ServerEvent::RetryableError => return Err(WorkerError::Transport),
+                        ServerEvent::RetryableError => return Err(WorkerError::Connection(format!("服务器返回可重试错误: {}", value))),
                         _ => {}
                     }
                 }
