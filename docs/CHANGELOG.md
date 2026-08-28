@@ -13,7 +13,7 @@
 - Added runtime status fields for heartbeat liveness and latest heartbeat time; connected server cards show green status.
 - Moved immediate native scans to Tauri blocking worker threads to keep the UI responsive.
 - Added processed list-style Wi-Fi/Bluetooth detail dialogs instead of raw JSON-only output.
-- Production Windows executable now uses the GUI subsystem so launch does not open a command window.
+- Added `%APPDATA%\com.remoteenv.collector\logs\collector.log` diagnostic logging with levels, 5 MB rotation, and sensitive-header filtering.
 - Set a restrictive local-resource CSP for the Tauri WebView.
 
 

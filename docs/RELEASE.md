@@ -46,7 +46,7 @@ Release 不向 `Program Files`、项目源码目录或 exe 所在目录写入运
 
 ## 故障日志
 
-当前版本把结构化运行状态显示在主界面，包括服务器连接、队列计数、扫描耗时、成功/失败计数和可读的采集错误。采集错误不会打印认证令牌、Cookie 或 Authorization header。收集故障信息时请提供应用版本、Windows 版本、主界面状态和复现时间；不要发送 `state.sqlite3` 或包含令牌的配置内容。
+当前版本把结构化运行状态显示在主界面，包括服务器连接、队列计数、扫描耗时、成功/失败计数和可读的采集错误。采集错误不会打印认证令牌、Cookie 或 Authorization header。运行日志写入 `%APPDATA%\com.remoteenv.collector\logs\collector.log`，最多保留最近 5 MB，超过后轮转为 `collector.log.1`；日志至少记录启动、服务器连接请求、扫描成功/失败和运行时关键错误。收集故障信息时请提供应用版本、Windows 版本、主界面状态和复现时间；不要发送 `state.sqlite3` 或包含令牌的配置内容。
 
 ## 验收命令
 
