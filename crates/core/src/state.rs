@@ -23,7 +23,7 @@ pub struct StateStore {
 impl StateStore {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, StateError> {
         let connection = Connection::open(path)?;
-        connection.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS sequences (device_id TEXT NOT NULL, data_type TEXT NOT NULL, value INTEGER NOT NULL, PRIMARY KEY(device_id, data_type)); CREATE TABLE IF NOT EXISTS upload_queue (id INTEGER PRIMARY KEY AUTOINCREMENT, envelope_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', UNIQUE(envelope_json)); CREATE INDEX IF NOT EXISTS idx_upload_queue_pending ON upload_queue(status, id);")?;
+        connection.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS sequences (device_id TEXT NOT NULL, data_type TEXT NOT NULL, value INTEGER NOT NULL, PRIMARY KEY(device_id, data_type)); CREATE TABLE IF NOT EXISTS upload_queue (id INTEGER PRIMARY KEY AUTOINCREMENT, envelope_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', UNIQUE(envelope_json)); CREATE INDEX IF NOT EXISTS idx_upload_queue_pending ON upload_queue(status, id); CREATE TABLE IF NOT EXISTS upload_deliveries (id INTEGER PRIMARY KEY AUTOINCREMENT, target_id TEXT NOT NULL, envelope_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', UNIQUE(target_id, envelope_json)); CREATE INDEX IF NOT EXISTS idx_upload_deliveries_pending ON upload_deliveries(target_id, status, id);")?;
         Ok(Self {
             connection: Arc::new(Mutex::new(connection)),
         })
@@ -198,6 +198,80 @@ impl StateStore {
         c.execute(
             "INSERT INTO sequences(device_id,data_type,value) VALUES(?1,?2,?3) ON CONFLICT(device_id,data_type) DO UPDATE SET value=MAX(value, excluded.value)",
             params![device_id, data_type, minimum as i64],
+        )?;
+        Ok(())
+    }
+
+    pub fn enqueue_target(
+        &self,
+        target_id: &str,
+        envelope: &EnvironmentEnvelope,
+    ) -> Result<bool, StateError> {
+        let c = self.lock()?;
+        let inserted = c.execute(
+            "INSERT OR IGNORE INTO upload_deliveries(target_id,envelope_json,status) VALUES(?1,?2,'pending')",
+            params![target_id, serde_json::to_string(envelope)?],
+        )?;
+        Ok(inserted == 1)
+    }
+
+    pub fn count_target_status(&self, target_id: &str, status: &str) -> Result<usize, StateError> {
+        let c = self.lock()?;
+        Ok(c.query_row(
+            "SELECT COUNT(*) FROM upload_deliveries WHERE target_id=?1 AND status=?2",
+            params![target_id, status],
+            |r| r.get::<_, i64>(0),
+        )? as usize)
+    }
+
+    pub fn pending_target(
+        &self,
+        target_id: &str,
+    ) -> Result<Vec<(i64, EnvironmentEnvelope)>, StateError> {
+        let c = self.lock()?;
+        let mut stmt = c.prepare("SELECT id,envelope_json FROM upload_deliveries WHERE target_id=?1 AND status='pending' ORDER BY id")?;
+        let rows = stmt.query_map(params![target_id], |r| {
+            let id = r.get(0)?;
+            let raw = r.get::<_, String>(1)?;
+            let envelope = serde_json::from_str(&raw).map_err(|error| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    1,
+                    rusqlite::types::Type::Text,
+                    Box::new(error),
+                )
+            })?;
+            Ok((id, envelope))
+        })?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StateError::Database)
+    }
+
+    pub fn claim_target(&self, target_id: &str, id: i64) -> Result<(), StateError> {
+        let c = self.lock()?;
+        c.execute("UPDATE upload_deliveries SET status='in_flight' WHERE target_id=?1 AND id=?2 AND status='pending'", params![target_id, id])?;
+        Ok(())
+    }
+
+    pub fn acknowledge_target(&self, target_id: &str, id: i64) -> Result<(), StateError> {
+        let c = self.lock()?;
+        c.execute(
+            "DELETE FROM upload_deliveries WHERE target_id=?1 AND id=?2",
+            params![target_id, id],
+        )?;
+        Ok(())
+    }
+
+    pub fn recover_target(&self, target_id: &str) -> Result<(), StateError> {
+        let c = self.lock()?;
+        c.execute("UPDATE upload_deliveries SET status='pending' WHERE target_id=?1 AND status='in_flight'", params![target_id])?;
+        Ok(())
+    }
+
+    pub fn block_target(&self, target_id: &str, id: i64) -> Result<(), StateError> {
+        let c = self.lock()?;
+        c.execute(
+            "UPDATE upload_deliveries SET status='blocked' WHERE target_id=?1 AND id=?2",
+            params![target_id, id],
         )?;
         Ok(())
     }

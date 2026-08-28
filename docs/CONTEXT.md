@@ -56,15 +56,11 @@ Phase 1.5 implementation is partial: Core persistence, queue, protocol handling,
 - UI reads `get_runtime_status`; current refresh is a low-rate fallback until Tauri event push is added.
 - Tray is not implemented yet.
 
-## Phase 1.5 status
+## Phase 1.75
 
-- Tauri runtime integration: implemented through `AppState`, `start_runtime`, `stop_runtime`, `get_runtime_status`, and `submit_test_event`.
-- WebSocket Supervisor: long-lived reconnect loop on a dedicated Tokio worker thread.
-- Queue integration: bounded event channel feeds persistent SQLite queue; in-flight rows are recovered after transport errors.
-- Mock Collector: command-generated events are marked with `{ "mock": true }`; no hardware scanner is enabled.
-- Fixture Server: local Tokio/Tungstenite fixture covers auth, `device_list`, upload, exact ACK, and close.
-- UI: reads Core status via Tauri command with one-second fallback polling.
-- Tray: partial/blocked; no tray menu is registered yet.
-- Tests: workspace Rust tests and UI production build pass.
-- Known issues: sender/receiver are still coordinated inside `WebSocketManager::run_once`; no full reconnect integration scenario or Tauri GUI manual run has been completed.
-- Next phase: Phase 2 — Windows Wi-Fi Collector.
+- `ServerProfile { id, name, url, token, enabled }` and `ServerMode::{Single, Multi}` are modeled in Core configuration. A single global sequence remains authoritative across server targets; this matches the server's per-device/data-type ordering model and avoids generating divergent event identities.
+- Delivery-state schema groundwork exists in SQLite as `upload_deliveries`; the active supervisor still uses the original queue and is not yet multi-server dispatch.
+- Runtime stop now races reconnect backoff against the stop signal.
+- Real backend smoke test is explicit and environment-only; it is ignored by default.
+- Windows WLAN research is recorded in `docs/WINDOWS_WIFI_RESEARCH.md`.
+- Status: Partial. Multi-target dispatcher, event push, tray, real backend execution, and full reconnect fixture remain.

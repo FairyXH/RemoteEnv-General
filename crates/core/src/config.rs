@@ -20,9 +20,31 @@ pub struct DeviceIdentity {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ServerProfile {
+    pub id: String,
+    pub name: String,
+    pub url: String,
+    pub token: String,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum ServerMode {
+    #[default]
+    Single,
+    Multi,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ClientConfig {
     pub server_url: String,
     pub token: String,
+    #[serde(default)]
+    pub server_profiles: Vec<ServerProfile>,
+    #[serde(default)]
+    pub server_mode: ServerMode,
+    #[serde(default)]
+    pub active_server_id: Option<String>,
     pub identity: DeviceIdentity,
     pub wifi_enabled: bool,
     pub ble_enabled: bool,
@@ -39,6 +61,9 @@ impl Default for ClientConfig {
         Self {
             server_url: "ws://127.0.0.1:8000/ws".into(),
             token: String::new(),
+            server_profiles: Vec::new(),
+            server_mode: ServerMode::Single,
+            active_server_id: None,
             identity: DeviceIdentity {
                 device_id: String::new(),
                 device_name: "RemoteEnvCollector".into(),
@@ -61,10 +86,10 @@ impl Default for ClientConfig {
 
 impl ClientConfig {
     pub fn validate(&self) -> Result<(), String> {
-        if self.server_url.trim().is_empty() {
+        if self.server_url.trim().is_empty() && self.server_profiles.is_empty() {
             return Err("server_url is required".into());
         }
-        if self.token.trim().is_empty() {
+        if self.token.trim().is_empty() && self.server_profiles.is_empty() {
             return Err("token is required".into());
         }
         if self.identity.device_id.trim().is_empty() {
@@ -79,6 +104,26 @@ impl ClientConfig {
         {
             return Err("max_queue_size and max_uploads_per_minute are invalid".into());
         }
+        for profile in &self.server_profiles {
+            if profile.id.trim().is_empty() || profile.name.trim().is_empty() {
+                return Err("server profile id and name are required".into());
+            }
+            if profile.url.trim().is_empty() || profile.token.trim().is_empty() {
+                return Err("server profile url and token are required".into());
+            }
+        }
         Ok(())
+    }
+
+    pub fn selected_servers(&self) -> Vec<&ServerProfile> {
+        match self.server_mode {
+            ServerMode::Single => self
+                .active_server_id
+                .as_deref()
+                .and_then(|id| self.server_profiles.iter().find(|p| p.id == id))
+                .into_iter()
+                .collect(),
+            ServerMode::Multi => self.server_profiles.iter().filter(|p| p.enabled).collect(),
+        }
     }
 }

@@ -102,7 +102,17 @@ impl RuntimeSupervisor {
                                 manager.mark_reconnecting();
                                 snapshot.connection = ConnectionState::Reconnecting;
                                 let _ = status_tx.send(snapshot);
-                                tokio::time::sleep(manager.next_reconnect_delay()).await;
+                                let delay = manager.next_reconnect_delay();
+                                tokio::select! {
+                                    _ = tokio::time::sleep(delay) => {}
+                                    _ = &mut stop_rx => {
+                                        manager.stop();
+                                        snapshot.connection = ConnectionState::Stopped;
+                                        let _ = status_tx.send(snapshot);
+                                        event_task.abort();
+                                        break;
+                                    }
+                                }
                             }
                         }
                         snapshot.connection = manager.state;

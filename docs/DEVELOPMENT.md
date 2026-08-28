@@ -43,4 +43,4 @@ cargo test -p remote-env-core
 5. Update `CONTEXT.md` and `CHANGELOG.md` after every completed phase.
 6. Hardware claims need real API/device evidence, not compilation alone.
 
-Phase 1.5 uses a dedicated Tokio runtime thread and bounded event channel. `RuntimeSupervisor` currently owns the reconnect loop and persistence recovery; Tauri owns lifecycle and commands. The current Core status path uses a watch snapshot and the UI reads it with a one-second fallback poll.
+Phase 1.75 uses a dedicated Tokio runtime thread and bounded event channel. `RuntimeSupervisor` owns reconnect and persistence recovery; Tauri owns lifecycle and commands. Real backend smoke tests are ignored by default and read `REMOTE_ENV_REAL_TEST`, `REMOTE_ENV_TEST_URL`, `REMOTE_ENV_TEST_DEVICE_ID`, and `REMOTE_ENV_TEST_TOKEN` only from the process environment. Never store these values in the repository.

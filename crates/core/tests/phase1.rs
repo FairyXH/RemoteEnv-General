@@ -41,6 +41,9 @@ fn identity_is_created_once_and_config_is_round_trippable() {
     let config = ClientConfig {
         server_url: "ws://example.invalid/ws".into(),
         token: "secret".into(),
+        server_profiles: Vec::new(),
+        server_mode: remote_env_core::config::ServerMode::Single,
+        active_server_id: None,
         identity: first,
         wifi_enabled: true,
         ble_enabled: false,
@@ -241,6 +244,75 @@ async fn websocket_fixture_authenticates_uploads_and_requires_matching_ack() {
     assert!(result.is_err());
     assert_eq!(queue.pending_count().unwrap(), 0);
     server.await.unwrap();
+}
+
+#[test]
+fn server_profiles_support_single_and_multi_selection() {
+    let mut config = ClientConfig::default();
+    config.server_profiles = vec![
+        remote_env_core::config::ServerProfile {
+            id: "a".into(),
+            name: "A".into(),
+            url: "ws://a".into(),
+            token: "x".into(),
+            enabled: true,
+        },
+        remote_env_core::config::ServerProfile {
+            id: "b".into(),
+            name: "B".into(),
+            url: "ws://b".into(),
+            token: "y".into(),
+            enabled: false,
+        },
+    ];
+    config.active_server_id = Some("b".into());
+    assert_eq!(config.selected_servers().len(), 1);
+    assert_eq!(config.selected_servers()[0].id, "b");
+    config.server_mode = remote_env_core::config::ServerMode::Multi;
+    assert_eq!(config.selected_servers().len(), 1);
+    assert_eq!(config.selected_servers()[0].id, "a");
+}
+
+#[tokio::test]
+#[ignore = "explicit real-backend smoke test; requires REMOTE_ENV_REAL_TEST=1"]
+async fn real_backend_smoke_test_uses_only_runtime_environment_configuration() {
+    if std::env::var("REMOTE_ENV_REAL_TEST").ok().as_deref() != Some("1") {
+        return;
+    }
+    let url = std::env::var("REMOTE_ENV_TEST_URL").expect("REMOTE_ENV_TEST_URL is required");
+    let device_id =
+        std::env::var("REMOTE_ENV_TEST_DEVICE_ID").expect("REMOTE_ENV_TEST_DEVICE_ID is required");
+    let token = std::env::var("REMOTE_ENV_TEST_TOKEN").expect("REMOTE_ENV_TEST_TOKEN is required");
+    let dir = tempdir().unwrap();
+    let store = StateStore::open(dir.path().join("state.sqlite3")).unwrap();
+    let queue = UploadQueue::new(store, 10);
+    let envelope = EnvironmentEnvelope::new(
+        &device_id,
+        "wifi",
+        1,
+        serde_json::json!({"mock": true, "source": "real-backend-smoke"}),
+    );
+    queue.enqueue(&envelope).unwrap();
+    let identity = remote_env_core::config::DeviceIdentity {
+        device_id,
+        device_name: "RemoteEnvCollector smoke".into(),
+        platform: "test".into(),
+        platform_version: "1".into(),
+        client_version: "1".into(),
+        hardware: None,
+    };
+    let mut manager =
+        remote_env_core::transport::WebSocketManager::new(std::time::Duration::from_secs(15));
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        manager.run_once(&url, &token, &identity, &queue),
+    )
+    .await;
+    assert!(
+        result.is_ok(),
+        "real backend did not complete upload/ACK window"
+    );
+    assert_eq!(queue.pending_count().unwrap(), 0);
 }
 
 #[test]

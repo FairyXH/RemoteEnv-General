@@ -43,6 +43,6 @@ Collectors must not call WebSocket APIs directly. UI reads application status sn
 - Reconnect is infinite, capped exponential backoff with jitter.
 - Tokens never appear in logs or UI status snapshots.
 
-## Phase 1 implementation
+## Multi-server configuration
 
-`StateStore` stores configuration, identity, per-type sequences, and upload rows in SQLite WAL mode. `UploadQueue` is a bounded facade over this store. `WebSocketManager` authenticates first, validates `device_list`, drains only matching ACKs, sends application heartbeats, and exposes reconnect backoff. Platform crates still report `NotImplemented`; no platform API is present in Core.
+`ClientConfig` contains `ServerProfile` records (`id`, `name`, `url`, `token`, `enabled`) and `ServerMode::{Single, Multi}`. Single mode selects `active_server_id`; Multi mode selects all enabled profiles. Tokens are persisted with the local configuration store but are never included in status snapshots or logs. The delivery table has been added as schema groundwork; the active runtime still uses the legacy single queue until target dispatch is completed.
