@@ -36,6 +36,8 @@ impl ServerWorkerStatus {
 
 #[derive(Debug, thiserror::Error)]
 pub enum WorkerError {
+    #[error("worker stopped")]
+    Stopped,
     #[error("worker transport failed")]
     Transport,
     #[error("worker protocol failed")]
@@ -135,6 +137,10 @@ impl ServerWorker {
         loop {
             self.publish(ConnectionState::Connecting);
             let result = self.run_connection(&mut stop).await;
+            if matches!(result, Err(WorkerError::Stopped)) {
+                self.publish(ConnectionState::Stopped);
+                return;
+            }
             let _ = self.dispatcher.recover(&self.profile.id);
             self.refresh_counts();
             if matches!(result, Err(WorkerError::Blocked(_))) {
@@ -159,7 +165,7 @@ impl ServerWorker {
     ) -> Result<(), WorkerError> {
         let connect = connect_async(&self.profile.url);
         let (mut socket, _) = tokio::select! {
-            _ = &mut *stop => return Ok(()),
+            _ = &mut *stop => return Err(WorkerError::Stopped),
             result = connect => result.map_err(|_| WorkerError::Transport)?,
         };
         self.publish(ConnectionState::Connected);
@@ -178,7 +184,7 @@ impl ServerWorker {
             .map_err(|_| WorkerError::Transport)?;
         self.publish(ConnectionState::Authenticating);
         let auth_result = tokio::select! {
-            _ = &mut *stop => return Ok(()),
+            _ = &mut *stop => return Err(WorkerError::Stopped),
             result = next_json(&mut socket) => result?,
         };
         if auth_result["type"] != "auth_result" || auth_result["success"] != true {
@@ -190,7 +196,7 @@ impl ServerWorker {
             ));
         }
         let device_list = tokio::select! {
-            _ = &mut *stop => return Ok(()),
+            _ = &mut *stop => return Err(WorkerError::Stopped),
             result = next_json(&mut socket) => result?,
         };
         if device_list["type"] != "device_list" {
@@ -217,7 +223,7 @@ impl ServerWorker {
                 }
             }
             tokio::select! {
-                _ = &mut *stop => return Ok(()),
+                _ = &mut *stop => return Err(WorkerError::Stopped),
                 _ = heartbeat.tick() => {
                     let frame = HeartbeatFrame { r#type: "heartbeat".into(), timestamp: now_ms() };
                     socket.send(Message::Text(serde_json::to_string(&frame).map_err(|_| WorkerError::Protocol)?.into())).await.map_err(|_| WorkerError::Transport)?;

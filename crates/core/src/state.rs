@@ -255,10 +255,93 @@ impl StateStore {
     pub fn acknowledge_target(&self, target_id: &str, id: i64) -> Result<(), StateError> {
         let c = self.lock()?;
         c.execute(
-            "DELETE FROM upload_deliveries WHERE target_id=?1 AND id=?2",
+            "UPDATE upload_deliveries SET status='completed' WHERE target_id=?1 AND id=?2 AND status='in_flight'",
             params![target_id, id],
         )?;
         Ok(())
+    }
+
+    pub fn delivery_status(
+        &self,
+        target_id: &str,
+        device_id: &str,
+        data_type: &str,
+        sequence: u64,
+    ) -> Result<Option<String>, StateError> {
+        Ok(self
+            .target_envelopes(target_id)?
+            .into_iter()
+            .find(|(_, envelope)| {
+                envelope.device_id == device_id
+                    && envelope.data_type == data_type
+                    && envelope.sequence == sequence
+            })
+            .map(|(status, _)| status))
+    }
+
+    pub fn target_envelopes(
+        &self,
+        target_id: &str,
+    ) -> Result<Vec<(String, EnvironmentEnvelope)>, StateError> {
+        let c = self.lock()?;
+        let mut stmt = c.prepare(
+            "SELECT status,envelope_json FROM upload_deliveries WHERE target_id=?1 ORDER BY id",
+        )?;
+        let rows = stmt.query_map(params![target_id], |r| {
+            let status = r.get(0)?;
+            let raw = r.get::<_, String>(1)?;
+            let envelope = serde_json::from_str(&raw).map_err(|error| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    1,
+                    rusqlite::types::Type::Text,
+                    Box::new(error),
+                )
+            })?;
+            Ok((status, envelope))
+        })?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StateError::Database)
+    }
+
+    pub fn event_complete(
+        &self,
+        device_id: &str,
+        data_type: &str,
+        sequence: u64,
+    ) -> Result<bool, StateError> {
+        let matching: Vec<_> = self
+            .all_delivery_envelopes()?
+            .into_iter()
+            .filter(|(_, envelope)| {
+                envelope.device_id == device_id
+                    && envelope.data_type == data_type
+                    && envelope.sequence == sequence
+            })
+            .collect();
+        Ok(!matching.is_empty()
+            && matching
+                .iter()
+                .all(|(status, _)| status == "completed" || status == "cancelled"))
+    }
+
+    fn all_delivery_envelopes(&self) -> Result<Vec<(String, EnvironmentEnvelope)>, StateError> {
+        let c = self.lock()?;
+        let mut stmt =
+            c.prepare("SELECT status,envelope_json FROM upload_deliveries ORDER BY id")?;
+        let rows = stmt.query_map([], |r| {
+            let status = r.get(0)?;
+            let raw = r.get::<_, String>(1)?;
+            let envelope = serde_json::from_str(&raw).map_err(|error| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    1,
+                    rusqlite::types::Type::Text,
+                    Box::new(error),
+                )
+            })?;
+            Ok((status, envelope))
+        })?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StateError::Database)
     }
 
     pub fn recover_target(&self, target_id: &str) -> Result<(), StateError> {

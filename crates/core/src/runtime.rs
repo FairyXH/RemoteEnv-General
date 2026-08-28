@@ -137,7 +137,7 @@ impl RuntimeSupervisor {
 
     pub fn update_config(&self, config: ClientConfig) -> Result<(), RuntimeError> {
         self.config_updates
-            .blocking_send(config)
+            .try_send(config)
             .map_err(|_| RuntimeError::EventChannelClosed)
     }
 
