@@ -180,6 +180,14 @@ impl UploadDispatcher {
         Ok(self.store.cancel_target_delivery(server_id, id)?)
     }
 
+    pub fn cancel_target_except_device(&self, server_id: &str, device_id: &str) -> Result<(), DispatcherError> {
+        Ok(self.store.cancel_target_except_device(server_id, device_id)?)
+    }
+
+    pub fn unblock_target(&self, target_id: &str) -> Result<(), DispatcherError> {
+        Ok(self.store.unblock_target(target_id)?)
+    }
+
     pub fn recover(&self, server_id: &str) -> Result<(), DispatcherError> {
         Ok(self.store.recover_target(server_id)?)
     }

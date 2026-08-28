@@ -377,6 +377,10 @@ impl RuntimeSupervisor {
                     let dispatcher = UploadDispatcher::new(store.clone());
                     let mut supervisor = DispatcherSupervisor::new(dispatcher.clone(), config.identity.clone(), Duration::from_secs(config.heartbeat_interval_seconds));
                     supervisor.apply_config(&config).await;
+                    for profile in config.selected_servers() {
+                        let _ = dispatcher.unblock_target(&profile.id);
+                        let _ = dispatcher.cancel_target_except_device(&profile.id, &profile.device_id);
+                    }
                     let mut current_config = config;
                     let mut status_tick = tokio::time::interval(Duration::from_millis(20));
                     let mut upload_tick = tokio::time::interval(Duration::from_secs(current_config.upload_interval_seconds));
@@ -406,6 +410,10 @@ impl RuntimeSupervisor {
                             }
                             Some(updated_config) = config_rx.recv() => {
                                 supervisor.apply_config(&updated_config).await;
+                                for profile in updated_config.selected_servers() {
+                                    let _ = dispatcher.unblock_target(&profile.id);
+                                    let _ = dispatcher.cancel_target_except_device(&profile.id, &profile.device_id);
+                                }
                                 if let Some(worker) = worker.as_ref() { worker.configure(updated_config.wifi_enabled, Duration::from_secs(1)); }
                                 if let Some(worker) = bluetooth_worker.as_ref() { worker.configure(updated_config.bluetooth_enabled, Duration::from_secs(1)); }
                                 upload_tick = tokio::time::interval(Duration::from_secs(updated_config.upload_interval_seconds));

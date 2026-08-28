@@ -152,9 +152,6 @@ impl ServerWorker {
         loop {
             self.publish(ConnectionState::Connecting);
             let result = self.run_connection(&mut stop).await;
-            if !matches!(result, Err(WorkerError::Stopped)) {
-                self.status.last_error = None;
-            }
             if let Err(error) = &result {
                 if !matches!(error, WorkerError::Stopped) {
                     self.status.last_error = Some(error.to_string());
@@ -246,8 +243,8 @@ impl ServerWorker {
             if in_flight.is_none() {
                 if let Some(item) = self.dispatcher.claim_next(&self.profile.id)? {
                     if item.1.device_id != self.identity.device_id {
-                        self.dispatcher.block(&self.profile.id, item.0)?;
-                        self.status.last_error = Some(format!("本地待上传数据的 device_id 与当前认证身份不一致: auth_device_id={}, envelope_device_id={}, profile_id={}", self.identity.device_id, item.1.device_id, self.profile.id));
+                        self.dispatcher.cancel_delivery(&self.profile.id, item.0)?;
+                        self.status.last_error = Some(format!("本地队列存在其他设备数据，已跳过: auth_device_id={}, envelope_device_id={}, profile_id={}", self.identity.device_id, item.1.device_id, self.profile.id));
                         self.refresh_counts();
                         continue;
                     }
