@@ -2,11 +2,19 @@ use remote_env_core::collector::CollectorEvent;
 
 use remote_env_core::runtime::{RuntimeError, RuntimeStatus, RuntimeSupervisor};
 use remote_env_core::state::StateStore;
+use remote_env_platform_windows::wifi::{NativeWlanProvider, WiFiCollector};
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{Manager, State};
 
 pub struct AppState(Mutex<Option<RuntimeSupervisor>>);
+
+#[tauri::command]
+fn scan_wifi() -> Result<remote_env_core::collector::CollectorEvent, String> {
+    WiFiCollector::new(NativeWlanProvider::new(), true)
+        .scan_once()
+        .map_err(|error| error.to_string())
+}
 
 fn state_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
@@ -89,6 +97,7 @@ pub fn run() {
         .manage(AppState(Mutex::new(None)))
         .invoke_handler(tauri::generate_handler![
             get_runtime_status,
+            scan_wifi,
             submit_test_event,
             start_runtime,
             stop_runtime

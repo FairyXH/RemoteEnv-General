@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Phase 2-A (partial)
+
+- Added the Windows WLAN BSS collector foundation using `windows-sys`, including normalized Wi-Fi snapshots, mock-provider tests, and a manual scan example.
+- Added a Tauri `scan_wifi` command; upload remains exclusively in the existing Runtime/Dispatcher path.
+
 ### Phase 1.75-C
 
 - RuntimeSupervisor now owns the collector event channel and persists each event directly into `upload_deliveries`; the legacy `upload_queue` is no longer the Runtime upload path.

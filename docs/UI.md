@@ -6,7 +6,7 @@
 
 ## First Windows surface
 
-The UI reads `get_runtime_status` and renders the real `servers` list, including each profile's connection state and target delivery counts. Collector capabilities remain `Not implemented`; no synthetic scan data is shown.
+The UI reads `get_runtime_status` and renders the real `servers` list, including each profile's connection state and target delivery counts. Wi-Fi status is now sourced from the runtime status model; BLE and Classic Bluetooth remain `Not implemented`.
 
 ## Tray
 

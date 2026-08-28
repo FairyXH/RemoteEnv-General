@@ -51,3 +51,7 @@ cargo test -p remote-env-core
 
 Integration verification is in `crates/core/tests/phase175c.rs`. It uses temporary SQLite state and two independently bound local WebSocket listeners; tests wait on bounded predicates and stop the Runtime before returning. The Rust ignored smoke skeleton remains available for protocol experiments; the corrected endpoint was verified successfully by the standalone Python client. No credentials are stored in the repository. The full workspace gate currently passes.
 
+## Windows Wi-Fi manual check
+
+Run `cargo run -p remote-env-platform-windows --example windows_wifi_scan` on a Windows host with WLAN service and a supported adapter. The command prints only interface count, BSS count, and duration. It does not print SSIDs, BSSIDs, credentials, or tokens.
+

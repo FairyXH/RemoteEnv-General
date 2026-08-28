@@ -60,3 +60,7 @@ Event completion is target-scoped: an event is complete only when every selected
 ### Phase 1.75-C verification status
 
 `crates/core/tests/phase175c.rs` drives the live `RuntimeSupervisor -> DispatcherSupervisor -> ServerWorker` chain against independent A/B listeners. It verifies dual readiness, identical event envelopes, target-local recovery, Single-to-Multi and Multi-to-Single transitions, profile replacement/removal, rate-limit isolation, heartbeat observation, missing-pong reconnect, ACK isolation, and authentication blocking. The phase is Complete after the local gates and standalone Python real-backend verification passed.
+
+## Phase 2-A boundary
+
+The Windows Wi-Fi adapter is isolated in `remote-env-platform-windows::wifi`. It normalizes native WLAN BSS records to `WiFiObservation` and emits one snapshot `CollectorEvent` per scan. The current Tauri command is an explicit scan entry point; periodic Runtime scheduling is still pending.

@@ -2,7 +2,7 @@
 
 | Platform | Shell | Collector status | Current boundary |
 | --- | --- | --- | --- |
-| Windows | Tauri desktop | Not implemented | `remote-env-platform-windows` will own WLAN, BLE, and Classic Bluetooth adapters. |
+| Windows | Tauri desktop | Wi-Fi available; BLE/Classic Bluetooth not implemented | `remote-env-platform-windows` owns the WLAN adapter. |
 | Android | Tauri mobile planned | Not implemented | independent adapter placeholder; future Tauri mobile/Kotlin bridge. |
 | Linux | Tauri desktop later | Not implemented | placeholder for NetworkManager/BlueZ adapters. |
 | macOS | Tauri desktop later | Not implemented | placeholder for CoreWLAN/CoreBluetooth adapters. |

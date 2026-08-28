@@ -6,7 +6,7 @@ Read this file, `ARCHITECTURE.md`, and `DEVELOPMENT.md` before changes. For tran
 
 ## Current state
 
-Phase 1.5 implementation is partial: Core persistence, queue, protocol handling, a long-lived supervisor, Tauri commands, and a local WebSocket fixture test are implemented. Tray behavior and production-grade UI event push remain. Real platform scanners remain intentionally unimplemented.
+Phase 2-A implementation is partial: Windows WLAN BSS scanning, normalized observations, mock collector tests, and a manual scan example are implemented. Runtime periodic collector scheduling, full status wiring, and hardware evidence remain.
 
 ## Completed
 
@@ -41,6 +41,12 @@ Phase 1.5 implementation is partial: Core persistence, queue, protocol handling,
 - Client: `D:\Files\Develop\Cross-Platform\RemoteEnvCollector`
 - Server API: `D:\Files\Develop\Algorithm_Development\Python\RemoteEnvProject\RemoteEnvServer\docs\api.md`
 - Server WS runtime: `D:\Files\Develop\Algorithm_Development\Python\RemoteEnvProject\RemoteEnvServer\remote_env_server\bus.py`
+
+## Phase 2-A status
+
+Status: Partial. Implemented `windows-sys` WLAN bindings, BSS-based snapshots, SSID/BSSID/frequency normalization, mock provider tests, and a Tauri scan command. Not implemented: periodic Runtime-owned collector task, persisted last-scan/count status, security IE parsing, and real Windows hardware test evidence.
+
+Next step: wire a stop-aware blocking scan worker into RuntimeSupervisor and expose its truthful status snapshot.
 
 ## Phase 1.75-C status
 

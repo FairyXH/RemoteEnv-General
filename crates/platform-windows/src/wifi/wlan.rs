@@ -40,6 +40,7 @@ impl super::collector::WlanProvider for NativeWlanProvider {
     }
 }
 
+#[allow(unsafe_op_in_unsafe_fn)]
 unsafe fn enumerate(handle: HANDLE, started: Instant) -> Result<WiFiSnapshot, WiFiError> {
     let mut interfaces = null_mut();
     check(WlanEnumInterfaces(handle, null_mut(), &mut interfaces))?;
@@ -94,7 +95,10 @@ unsafe fn enumerate(handle: HANDLE, started: Instant) -> Result<WiFiSnapshot, Wi
                 band: band_for_frequency(frequency),
                 phy_type: Some(format!("{}", entry.dot11BssPhyType)),
                 network_type: None,
-                security: Security::default(),
+                security: Security {
+                    privacy: Some((entry.usCapabilityInformation & 0x0010) != 0),
+                    ..Security::default()
+                },
                 interface_id: interface_id.clone(),
             });
         }
