@@ -132,6 +132,69 @@ impl PeriodicCollectorHandle {
     }
 }
 
+struct BluetoothWorkerHandle {
+    control: CollectorControl,
+    stop: Arc<AtomicBool>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl BluetoothWorkerHandle {
+    fn start(
+        scan: CollectorScan,
+        enabled: bool,
+        interval: Duration,
+        events: mpsc::Sender<CollectorEvent>,
+        statuses: mpsc::Sender<BluetoothRuntimeStatus>,
+    ) -> Self {
+        let (commands, mut command_rx) = mpsc::channel(4);
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_flag = Arc::clone(&stop);
+        let thread = std::thread::Builder::new().name("remote-env-bluetooth-worker".into()).spawn(move || {
+            let Ok(runtime) = tokio::runtime::Runtime::new() else { return; };
+            runtime.block_on(async move {
+                let mut enabled = enabled; let mut ticker = tokio::time::interval(interval);
+                ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                let mut total = 0; let mut successful = 0; let mut failed = 0;
+                if enabled { ticker.reset(); }
+                loop {
+                    tokio::select! {
+                        _ = ticker.tick(), if enabled => {
+                            if stop_flag.load(Ordering::Acquire) { break; }
+                            total += 1; let started = std::time::Instant::now();
+                            let _ = statuses.send(BluetoothRuntimeStatus { enabled, state: WiFiRuntimeState::Scanning, total_scans: total, successful_scans: successful, failed_scans: failed, ..Default::default() }).await;
+                            match timeout(Duration::from_secs(120), tokio::task::spawn_blocking({ let scan = Arc::clone(&scan); move || scan() })).await {
+                                Ok(Ok(Ok(event))) => { successful += 1; let items = event.data["observations"].as_array(); let count = items.map_or(0, Vec::len); let ble = items.map_or(0, |v| v.iter().filter(|x| matches!(x["transport"].as_str(), Some("ble") | Some("dual"))).count()); let classic = items.map_or(0, |v| v.iter().filter(|x| matches!(x["transport"].as_str(), Some("classic") | Some("dual"))).count()); let now = now_ms(); let _ = statuses.send(BluetoothRuntimeStatus { enabled, state: WiFiRuntimeState::Ready, ble_device_count: ble, classic_device_count: classic, device_count: Some(count), last_scan_ms: Some(now), last_successful_scan_ms: Some(now), last_error: None, total_scans: total, successful_scans: successful, failed_scans: failed, duration_ms: Some(started.elapsed().as_millis() as u64) }).await; let _ = events.send(event).await; }
+                                Ok(Ok(Err(error))) => { failed += 1; let _ = statuses.send(BluetoothRuntimeStatus { enabled, state: WiFiRuntimeState::Error, last_error: Some(error), total_scans: total, successful_scans: successful, failed_scans: failed, ..Default::default() }).await; }
+                                Ok(Err(error)) => { failed += 1; let _ = statuses.send(BluetoothRuntimeStatus { enabled, state: WiFiRuntimeState::Error, last_error: Some(error.to_string()), total_scans: total, successful_scans: successful, failed_scans: failed, ..Default::default() }).await; }
+                                Err(error) => { failed += 1; let _ = statuses.send(BluetoothRuntimeStatus { enabled, state: WiFiRuntimeState::Error, last_error: Some(error.to_string()), total_scans: total, successful_scans: successful, failed_scans: failed, ..Default::default() }).await; }
+                            }
+                        }
+                        Some(CollectorCommand::Configure { enabled: next, interval: next_interval }) = command_rx.recv() => { enabled = next; ticker = tokio::time::interval(next_interval); ticker.tick().await; if !enabled { let _ = statuses.send(BluetoothRuntimeStatus { state: WiFiRuntimeState::Disabled, ..Default::default() }).await; } }
+                        _ = tokio::time::sleep(Duration::from_millis(20)) => if stop_flag.load(Ordering::Acquire) { break; },
+                    }
+                }
+            });
+        }).expect("Bluetooth worker thread failed to start");
+        Self {
+            control: CollectorControl { commands },
+            stop,
+            thread: Some(thread),
+        }
+    }
+    fn configure(&self, enabled: bool, interval: Duration) {
+        let _ = self
+            .control
+            .commands
+            .try_send(CollectorCommand::Configure { enabled, interval });
+    }
+    fn stop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum CollectorStatus {
     NotImplemented,
@@ -185,10 +248,47 @@ impl Default for WiFiRuntimeStatus {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct BluetoothRuntimeStatus {
+    pub enabled: bool,
+    pub state: WiFiRuntimeState,
+    pub ble_device_count: usize,
+    pub classic_device_count: usize,
+    pub device_count: Option<usize>,
+    pub last_scan_ms: Option<i64>,
+    pub last_successful_scan_ms: Option<i64>,
+    pub last_error: Option<String>,
+    pub total_scans: u64,
+    pub successful_scans: u64,
+    pub failed_scans: u64,
+    pub duration_ms: Option<u64>,
+}
+
+impl Default for BluetoothRuntimeStatus {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            state: WiFiRuntimeState::Disabled,
+            ble_device_count: 0,
+            classic_device_count: 0,
+            device_count: None,
+            last_scan_ms: None,
+            last_successful_scan_ms: None,
+            last_error: None,
+            total_scans: 0,
+            successful_scans: 0,
+            failed_scans: 0,
+            duration_ms: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct RuntimeStatus {
     pub connection: ConnectionState,
     pub wifi: CollectorStatus,
     pub wifi_runtime: WiFiRuntimeStatus,
+    pub bluetooth: CollectorStatus,
+    pub bluetooth_runtime: BluetoothRuntimeStatus,
     pub ble: CollectorStatus,
     pub classic_bluetooth: CollectorStatus,
     pub pending: usize,
@@ -205,6 +305,8 @@ impl Default for RuntimeStatus {
             connection: ConnectionState::Disconnected,
             wifi: CollectorStatus::NotImplemented,
             wifi_runtime: WiFiRuntimeStatus::default(),
+            bluetooth: CollectorStatus::NotImplemented,
+            bluetooth_runtime: BluetoothRuntimeStatus::default(),
             ble: CollectorStatus::NotImplemented,
             classic_bluetooth: CollectorStatus::NotImplemented,
             pending: 0,
@@ -243,6 +345,15 @@ impl RuntimeSupervisor {
         store: StateStore,
         scan: Option<CollectorScan>,
     ) -> Result<Self, RuntimeError> {
+        Self::start_with_collectors(config, store, scan, None)
+    }
+
+    pub fn start_with_collectors(
+        config: ClientConfig,
+        store: StateStore,
+        scan: Option<CollectorScan>,
+        bluetooth_scan: Option<CollectorScan>,
+    ) -> Result<Self, RuntimeError> {
         config.validate().map_err(RuntimeError::Configuration)?;
         let dispatcher = UploadDispatcher::new(store.clone());
         if dispatcher.resolve_targets(&config).is_empty() {
@@ -253,7 +364,10 @@ impl RuntimeSupervisor {
         let (status_tx, status) = watch::channel(RuntimeStatus::default());
         let (stop, mut stop_rx) = tokio::sync::oneshot::channel();
         let (wifi_status_tx, mut wifi_status_rx) = mpsc::channel::<WiFiRuntimeStatus>(16);
+        let (bluetooth_status_tx, mut bluetooth_status_rx) =
+            mpsc::channel::<BluetoothRuntimeStatus>(16);
         let events_for_worker = events.clone();
+        let events_for_bluetooth_worker = events.clone();
         let thread = std::thread::Builder::new()
             .name("remote-env-runtime".into())
             .spawn(move || {
@@ -265,7 +379,9 @@ impl RuntimeSupervisor {
                     let mut current_config = config;
                     let mut status_tick = tokio::time::interval(Duration::from_millis(20));
                     let worker = scan.map(|scan| PeriodicCollectorHandle::start(scan, current_config.wifi_enabled, Duration::from_secs(current_config.scan_interval_seconds), events_for_worker.clone(), wifi_status_tx));
+                    let bluetooth_worker = bluetooth_scan.map(|scan| BluetoothWorkerHandle::start(scan, current_config.bluetooth_enabled, Duration::from_secs(current_config.scan_interval_seconds), events_for_bluetooth_worker.clone(), bluetooth_status_tx));
                     let mut wifi_runtime = WiFiRuntimeStatus::default();
+                    let mut bluetooth_runtime = BluetoothRuntimeStatus::default();
                     loop {
                         tokio::select! {
                             _ = &mut stop_rx => break,
@@ -277,10 +393,14 @@ impl RuntimeSupervisor {
                             Some(updated_config) = config_rx.recv() => {
                                 supervisor.apply_config(&updated_config).await;
                                 if let Some(worker) = worker.as_ref() { worker.configure(updated_config.wifi_enabled, Duration::from_secs(updated_config.scan_interval_seconds)); }
+                                if let Some(worker) = bluetooth_worker.as_ref() { worker.configure(updated_config.bluetooth_enabled, Duration::from_secs(updated_config.scan_interval_seconds)); }
                                 current_config = updated_config;
                             }
                             Some(updated_wifi) = wifi_status_rx.recv() => {
                                 wifi_runtime = updated_wifi;
+                            }
+                            Some(updated_bluetooth) = bluetooth_status_rx.recv() => {
+                                bluetooth_runtime = updated_bluetooth;
                             }
                             _ = status_tick.tick() => {
                                 let servers = supervisor.statuses();
@@ -291,15 +411,18 @@ impl RuntimeSupervisor {
                                 snapshot.in_flight = snapshot.servers.iter().map(|s| s.in_flight).sum();
                                 snapshot.blocked = snapshot.servers.iter().map(|s| s.blocked).sum();
                                 snapshot.wifi_runtime = wifi_runtime.clone(); snapshot.wifi = match wifi_runtime.state { WiFiRuntimeState::Disabled => CollectorStatus::Disabled, WiFiRuntimeState::Starting => CollectorStatus::Starting, WiFiRuntimeState::Scanning => CollectorStatus::Scanning, WiFiRuntimeState::Ready => CollectorStatus::Ready, WiFiRuntimeState::Error => CollectorStatus::Error, WiFiRuntimeState::Stopped => CollectorStatus::Stopped };
+                                snapshot.bluetooth_runtime = bluetooth_runtime.clone(); snapshot.bluetooth = match bluetooth_runtime.state { WiFiRuntimeState::Disabled => CollectorStatus::Disabled, WiFiRuntimeState::Starting => CollectorStatus::Starting, WiFiRuntimeState::Scanning => CollectorStatus::Scanning, WiFiRuntimeState::Ready => CollectorStatus::Ready, WiFiRuntimeState::Error => CollectorStatus::Error, WiFiRuntimeState::Stopped => CollectorStatus::Stopped };
                                 let _ = status_tx.send(snapshot);
                             }
                         }
                     }
                     supervisor.stop().await;
                     if let Some(mut worker) = worker { worker.stop(); }
+                    if let Some(mut worker) = bluetooth_worker { worker.stop(); }
                     let mut snapshot = RuntimeStatus::default();
                     snapshot.connection = ConnectionState::Stopped;
                     snapshot.wifi_runtime = wifi_runtime; snapshot.wifi = CollectorStatus::Stopped;
+                    snapshot.bluetooth_runtime = bluetooth_runtime; snapshot.bluetooth = CollectorStatus::Stopped;
                     let _ = status_tx.send(snapshot);
                 });
             })
@@ -388,6 +511,8 @@ impl Runtime {
             connection: ConnectionState::Disconnected,
             wifi: CollectorStatus::NotImplemented,
             wifi_runtime: WiFiRuntimeStatus::default(),
+            bluetooth: CollectorStatus::NotImplemented,
+            bluetooth_runtime: BluetoothRuntimeStatus::default(),
             ble: CollectorStatus::NotImplemented,
             classic_bluetooth: CollectorStatus::NotImplemented,
             pending: self.queue.pending_count()?,

@@ -2,6 +2,9 @@ use remote_env_core::collector::CollectorEvent;
 
 use remote_env_core::runtime::{RuntimeError, RuntimeStatus, RuntimeSupervisor};
 use remote_env_core::state::StateStore;
+use remote_env_platform_windows::bluetooth::{
+    BluetoothCollector, NativeBleScanner, NativeClassicBluetoothScanner,
+};
 use remote_env_platform_windows::wifi::{NativeWlanProvider, WiFiCollector, WlanProvider};
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -14,6 +17,16 @@ fn scan_wifi() -> Result<remote_env_core::collector::CollectorEvent, String> {
     WiFiCollector::new(NativeWlanProvider::new(), true)
         .scan_once()
         .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn scan_bluetooth() -> Result<remote_env_core::collector::CollectorEvent, String> {
+    BluetoothCollector::new(
+        NativeBleScanner::new(),
+        NativeClassicBluetoothScanner::new(),
+    )
+    .scan_once()
+    .map_err(|error| error.to_string())
 }
 
 fn state_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -76,7 +89,7 @@ fn start_runtime(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<()
         return Err("configure server URL and token before starting runtime".into());
     }
     *guard = Some(
-        RuntimeSupervisor::start_with_collector(
+        RuntimeSupervisor::start_with_collectors(
             config,
             store,
             Some(std::sync::Arc::new(|| {
@@ -94,6 +107,14 @@ fn start_runtime(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<()
                         })
                     })
                     .map_err(|error| error.to_string())
+            })),
+            Some(std::sync::Arc::new(|| {
+                BluetoothCollector::new(
+                    NativeBleScanner::new(),
+                    NativeClassicBluetoothScanner::new(),
+                )
+                .scan_once()
+                .map_err(|error| error.to_string())
             })),
         )
         .map_err(|e: RuntimeError| e.to_string())?,
@@ -119,6 +140,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_runtime_status,
             scan_wifi,
+            scan_bluetooth,
             submit_test_event,
             start_runtime,
             stop_runtime
