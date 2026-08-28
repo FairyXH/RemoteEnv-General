@@ -194,6 +194,7 @@ impl TestServer {
 
 fn config(identity: DeviceIdentity, a: &TestServer, b: &TestServer) -> ClientConfig {
     let mut config = ClientConfig::default();
+    let profile_device_id = identity.device_id.clone();
     config.identity = identity;
     config.heartbeat_interval_seconds = 1;
     config.server_profiles = vec![
@@ -201,6 +202,7 @@ fn config(identity: DeviceIdentity, a: &TestServer, b: &TestServer) -> ClientCon
             id: "a".into(),
             name: "A".into(),
             url: a.url.clone(),
+            device_id: profile_device_id.clone(),
             token: "a-token".into(),
             enabled: true,
         },
@@ -208,6 +210,7 @@ fn config(identity: DeviceIdentity, a: &TestServer, b: &TestServer) -> ClientCon
             id: "b".into(),
             name: "B".into(),
             url: b.url.clone(),
+            device_id: profile_device_id,
             token: "b-token".into(),
             enabled: true,
         },
@@ -402,6 +405,7 @@ async fn phase_175c_auth_failure_becomes_blocked_without_retry() {
         id: "a".into(),
         name: "A".into(),
         url: a.url.clone(),
+        device_id: "blocked-device".into(),
         token: "bad".into(),
         enabled: true,
     }];

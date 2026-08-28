@@ -148,6 +148,7 @@ fn config(url: String) -> ClientConfig {
         id: "bluetooth-server".into(),
         name: "Bluetooth fixture".into(),
         url,
+        device_id: "phase2b-device".into(),
         token: "fixture-token".into(),
         enabled: true,
     }];
@@ -224,6 +225,7 @@ async fn bluetooth_multi_server_ack_isolation_and_recovery_preserve_envelope() {
             id: "bluetooth-a".into(),
             name: "Bluetooth A".into(),
             url: a.url.clone(),
+            device_id: "phase2b-multi-device".into(),
             token: "a-token".into(),
             enabled: true,
         },
@@ -231,6 +233,7 @@ async fn bluetooth_multi_server_ack_isolation_and_recovery_preserve_envelope() {
             id: "bluetooth-b".into(),
             name: "Bluetooth B".into(),
             url: b.url.clone(),
+            device_id: "phase2b-multi-device".into(),
             token: "b-token".into(),
             enabled: true,
         },

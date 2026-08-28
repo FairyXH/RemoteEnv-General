@@ -98,7 +98,10 @@ impl DispatcherSupervisor {
                 let worker = WorkerHandle::start(
                     profile.clone(),
                     self.dispatcher.clone(),
-                    self.identity.clone(),
+                    DeviceIdentity {
+                        device_id: profile.device_id.clone(),
+                        ..self.identity.clone()
+                    },
                     self.heartbeat_interval,
                 );
                 self.workers.insert(profile.id.clone(), worker);

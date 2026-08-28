@@ -24,6 +24,8 @@ pub struct ServerProfile {
     pub id: String,
     pub name: String,
     pub url: String,
+    #[serde(default)]
+    pub device_id: String,
     pub token: String,
     pub enabled: bool,
 }
@@ -109,6 +111,18 @@ impl ClientConfig {
         {
             return Err("active_server_id is required in Single server mode".into());
         }
+        let selected = self.selected_servers();
+        if let Some(first) = selected.first() {
+            if first.device_id.trim().is_empty() {
+                return Err("selected server device_id is required".into());
+            }
+            if selected
+                .iter()
+                .any(|profile| profile.device_id != first.device_id)
+            {
+                return Err("selected server profiles must use the same device_id".into());
+            }
+        }
         if let Some(active_id) = self.active_server_id.as_deref()
             && !self
                 .server_profiles
@@ -121,8 +135,11 @@ impl ClientConfig {
             if profile.id.trim().is_empty() || profile.name.trim().is_empty() {
                 return Err("server profile id and name are required".into());
             }
-            if profile.url.trim().is_empty() || profile.token.trim().is_empty() {
-                return Err("server profile url and token are required".into());
+            if profile.url.trim().is_empty()
+                || profile.device_id.trim().is_empty()
+                || profile.token.trim().is_empty()
+            {
+                return Err("server profile url, device_id and token are required".into());
             }
         }
         Ok(())

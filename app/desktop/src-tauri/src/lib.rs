@@ -31,10 +31,11 @@ pub struct AppState {
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct ServerProfileView {
+pub struct ServerProfileView {
     id: String,
     name: String,
     url: String,
+    device_id: String,
     enabled: bool,
 }
 
@@ -54,6 +55,7 @@ struct ServerProfileInput {
     id: Option<String>,
     name: String,
     url: String,
+    device_id: Option<String>,
     token: Option<String>,
     enabled: bool,
 }
@@ -89,10 +91,21 @@ fn load_config(path: &PathBuf) -> Result<(StateStore, ClientConfig), String> {
     for profile in &mut config.server_profiles {
         profile.token = protect::decrypt(&profile.token).map_err(user_error)?;
     }
+    let mut migrated = false;
+    if !config.identity.device_id.is_empty() {
+        for profile in &mut config.server_profiles {
+            if profile.device_id.is_empty() {
+                profile.device_id = config.identity.device_id.clone();
+                migrated = true;
+            }
+        }
+    }
     if config.identity.device_id.is_empty() {
         config.identity = store
             .load_or_create_identity("RemoteEnvCollector", "windows", "")
             .map_err(user_error)?;
+        save_config(&store, &config)?;
+    } else if migrated {
         save_config(&store, &config)?;
     }
     Ok((store, config))
@@ -211,6 +224,7 @@ fn config_view(config: &ClientConfig) -> DesktopConfigView {
                 id: profile.id.clone(),
                 name: profile.name.clone(),
                 url: profile.url.clone(),
+                device_id: profile.device_id.clone(),
                 enabled: profile.enabled,
             })
             .collect(),
@@ -265,8 +279,9 @@ fn save_server_profile(
     let (store, mut config) = load_config(&state.state_path)?;
     let name = input.name.trim();
     let url = input.url.trim();
-    if name.is_empty() || url.is_empty() {
-        return Err("服务器名称和 WebSocket 地址不能为空。".into());
+    let device_id = input.device_id.as_deref().unwrap_or("").trim();
+    if name.is_empty() || url.is_empty() || device_id.is_empty() {
+        return Err("服务器名称、WebSocket 地址和设备 ID 不能为空。".into());
     }
     if !(url.starts_with("ws://") || url.starts_with("wss://")) {
         return Err("服务器地址必须以 ws:// 或 wss:// 开头。".into());
@@ -280,6 +295,7 @@ fn save_server_profile(
     {
         profile.name = name.into();
         profile.url = url.into();
+        profile.device_id = device_id.into();
         profile.enabled = input.enabled;
         if let Some(token) = input.token.filter(|token| !token.is_empty()) {
             profile.token = token;
@@ -293,6 +309,7 @@ fn save_server_profile(
             id: id.clone(),
             name: name.into(),
             url: url.into(),
+            device_id: device_id.into(),
             token,
             enabled: input.enabled,
         });
@@ -373,7 +390,10 @@ async fn test_server_profile(
         .find(|profile| profile.id == id)
         .cloned()
         .ok_or_else(|| "未找到服务器配置。".to_string())?;
-    let identity = config.identity;
+    let identity = remote_env_core::config::DeviceIdentity {
+        device_id: profile.device_id.clone(),
+        ..config.identity
+    };
     let test = async move {
         let (mut socket, _) = connect_async(&profile.url)
             .await

@@ -386,8 +386,13 @@ impl RuntimeSupervisor {
                         tokio::select! {
                             _ = &mut stop_rx => break,
                             Some(event) = event_rx.recv() => {
-                                let Ok(sequence) = store.next_sequence(&current_config.identity.device_id, &event.data_type) else { continue; };
-                                let envelope = EnvironmentEnvelope::new(current_config.identity.device_id.clone(), event.data_type, sequence, event.data);
+                                let device_id = current_config
+                                    .selected_servers()
+                                    .first()
+                                    .map(|profile| profile.device_id.clone())
+                                    .unwrap_or_else(|| current_config.identity.device_id.clone());
+                                let Ok(sequence) = store.next_sequence(&device_id, &event.data_type) else { continue; };
+                                let envelope = EnvironmentEnvelope::new(device_id, event.data_type, sequence, event.data);
                                 let _ = dispatcher.persist_event(&current_config, &envelope);
                             }
                             Some(updated_config) = config_rx.recv() => {
