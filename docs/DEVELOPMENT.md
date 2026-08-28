@@ -55,3 +55,5 @@ cargo test -p remote-env-core
 
 Run `cargo run -p remote-env-platform-windows --example windows_wifi_scan` on a Windows host with WLAN service and a supported adapter. The command prints only interface count, BSS count, and duration. It does not print SSIDs, BSSIDs, credentials, or tokens.
 
+The local end-to-end Wi-Fi fixture is `cargo test -p remote-env-core --test phase2a`. It uses a mock snapshot provider and a real local WebSocket fixture. The environment-only real backend smoke test additionally requires `REMOTE_ENV_REAL_TEST=1`, `REMOTE_ENV_TEST_URL`, `REMOTE_ENV_TEST_DEVICE_ID`, `REMOTE_ENV_TEST_TOKEN`, and an explicit `REMOTE_ENV_TEST_SEQUENCE`.
+

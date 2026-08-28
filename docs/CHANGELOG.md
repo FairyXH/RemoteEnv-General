@@ -8,6 +8,7 @@
 - Wi-Fi runtime status now exposes state, timestamps, AP count, scan counters, duration, and errors to the shared UI.
 - The Tauri desktop starts the Windows WLAN provider through RuntimeSupervisor; uploads continue through the existing dispatcher and delivery rows.
 - Revalidated the Windows WLAN probe with the adapter enabled: 1 interface, 10 BSS observations, and 1501 ms scan duration; `netsh` confirmed the radio was Software On.
+- Added `phase2a.rs` local WebSocket integration coverage for Wi-Fi payload persistence, sequence allocation, target delivery ACK completion, and recovery envelope identity. Real backend Wi-Fi upload is still pending because credentials were not present in the process environment.
 
 ### Phase 1.75-C
 

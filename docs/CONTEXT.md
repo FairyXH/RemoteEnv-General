@@ -6,7 +6,7 @@ Read this file, `ARCHITECTURE.md`, and `DEVELOPMENT.md` before changes. For tran
 
 ## Current state
 
-Phase 2-A implementation is partial: Windows WLAN BSS scanning, normalized observations, mock collector tests, a manual scan example, Runtime-owned periodic scheduling, and a successful real Windows WLAN probe are implemented. Full Runtime integration coverage and backend upload evidence remain.
+Phase 2-A is implemented and locally validated. Windows WLAN BSS scanning, normalized observations, Runtime-owned periodic scheduling, local Runtime-to-delivery integration, recovery coverage, UI status, and real hardware scanning are complete. Real backend Wi-Fi upload remains unverified because no user Token was available in the current process environment.
 
 ## Completed
 
@@ -14,65 +14,39 @@ Phase 2-A implementation is partial: Windows WLAN BSS scanning, normalized obser
 - Chosen Rust 2024 workspace plus Tauri 2 and shared React + TypeScript UI.
 - Defined isolated Windows, Android, Linux, and macOS crates.
 - Documented exact `data_result` ACK and persistent sequence constraints.
+- Windows WLAN API is isolated in `crates/platform-windows` and uses generated `windows-sys` WLAN bindings.
+- `RuntimeSupervisor::start_with_collector` runs the platform scan through a stop-aware periodic worker, `spawn_blocking`, dynamic `wifi_enabled`/interval configuration, and bounded timeout.
+- `crates/core/tests/phase2a.rs` verifies Wi-Fi payload -> Runtime -> upload delivery -> local WebSocket auth/device_list/upload/ACK -> completed, plus same envelope/sequence recovery after disconnect.
+- Real Windows probe with Software Radio On: 1 interface, 10 BSS observations, 1501 ms. `netsh` reported 6 SSID groups and multiple BSS entries.
 
 ## Not implemented
 
+- Real backend Wi-Fi upload with `CollectTestor` credentials; credentials were not present in the environment and were not searched for or stored.
+- Scan-completion notification callback; current provider uses a bounded 1500 ms wait after `WlanScan` before querying BSS cache.
+- Full authentication/encryption IE parsing and persisted scan history.
 - Full Tauri tray lifecycle and push-based UI status events.
-- Wi-Fi, BLE, Classic Bluetooth.
-- Windows tray behavior, Android generated project, Linux/macOS collection.
-- Hardware integration tests.
-
-## Protocol constraints
-
-- Collector auth is first WS message and requires `device` metadata.
-- Server application heartbeat supports `ping` -> `pong` and timestamped `heartbeat` -> `pong`.
-- ACK matches device/data type/sequence.
-- Sequences must increase across client restarts.
-- Process `error` immediately; do not wait only for ACK timeout.
-
-## Toolchain inspection
-
-- Node `v24.14.0`, npm `11.9.0`, Git `2.55.0.windows.1` installed.
-- Rust `1.98.0`, Cargo `1.98.0`, and rustup stable MSVC are available.
-- `winget` exists but community source queries failed; Rust bootstrap may require official installer.
-
-## Important paths
-
-- Client: `D:\Files\Develop\Cross-Platform\RemoteEnvCollector`
-- Server API: `D:\Files\Develop\Algorithm_Development\Python\RemoteEnvProject\RemoteEnvServer\docs\api.md`
-- Server WS runtime: `D:\Files\Develop\Algorithm_Development\Python\RemoteEnvProject\RemoteEnvServer\remote_env_server\bus.py`
+- BLE, Classic Bluetooth, Android, Linux, and macOS collectors.
 
 ## Phase 2-A status
 
-Status: Partial. Implemented `windows-sys` WLAN bindings, BSS snapshots, normalization, mock tests, Tauri command, Runtime-owned periodic scheduling, dynamic configuration, blocking isolation, timeout, status propagation, and UI status metrics. Runtime scheduling tests pass. Real Windows probe succeeded after enabling Software Radio: 1 interface, 10 BSS observations, 1501 ms; `netsh` reported Software On and 6 visible SSID groups with multiple BSS entries. Dedicated Runtime upload fixture and real Wi-Fi backend upload remain unverified.
+Status: Partial. All local code and test gates pass, and real Windows hardware scan passes. The only requested acceptance evidence still missing is real backend Wi-Fi upload and ACK using user-provided environment credentials. Do not mark Complete until that test is executed successfully.
 
-Next step: add the dedicated Runtime-to-`upload_deliveries` Wi-Fi fixture and run an environment-only real backend Wi-Fi upload test. Hardware proof is now available when the adapter is enabled.
+## Verification
 
-## Phase 1.75-C status
+- `cargo fmt --check`: PASS
+- `cargo check --workspace`: PASS
+- `cargo test --workspace`: PASS; Core unit 2, Core phase1 14 passed/1 ignored, Phase 1.75-C 8, Phase 2-A 2, Windows platform 4.
+- `app/ui`: `npm run build` PASS.
+- `cargo run -p remote-env-platform-windows --example windows_wifi_scan`: PASS, 1 interface, 10 networks, 1501 ms.
+- `netsh wlan show interfaces`: Hardware On, Software On.
+- `netsh wlan show networks mode=bssid`: 6 visible SSID groups, multiple BSS entries.
+- Security scan: no `rev1_` matches; `CollectTestor` appears only in the explicit environment-based smoke-test code/docs; no credential value is stored.
 
-Status: Complete. Runtime wiring is present: `RuntimeSupervisor -> DispatcherSupervisor -> ServerWorker(s)`, target delivery persistence is used for new events, and per-server status is exposed to UI. Windows Wi-Fi, BLE, and Classic Bluetooth remain `Not implemented` and are reserved for Phase 2.
+## Next step
 
-Local dual-server runtime coverage now verifies independent A/B readiness, same-envelope delivery, recovery, Single A -> Single B switching, and authentication blocking. The full Phase 1.75-C local checklist is covered by `phase175c.rs`; the phase is complete.
-The fixture has since added explicit A/B delivery-state assertions, heartbeat/auth-frame observation, Single A -> Multi A+B, Multi A+B -> Single B, profile removal cancellation, profile URL/token replacement, rate-limit isolation, and missing-pong reconnect coverage. Real backend verification: PASS via a standalone Python WebSocket client using the corrected endpoint. Verified TLS WebSocket connection, auth, successful auth_result, device_list (7 devices), heartbeat/pong, one marked environment_data upload, and matching data_result ACK. Credentials were supplied only through process environment variables and were not stored.
-- Configuration, stable identity, SQLite-backed sequences, bounded durable queue, ACK matching, heartbeat monitoring, explicit states, and capped infinite retry backoff are implemented.
-- `cargo fmt --check`, `cargo check --workspace`, and `cargo test --workspace` pass. `npm run build` passes.
+Run the environment-only real backend Wi-Fi smoke test with user-provided `REMOTE_ENV_TEST_URL`, `REMOTE_ENV_TEST_DEVICE_ID`, `REMOTE_ENV_TEST_TOKEN`, and `REMOTE_ENV_TEST_SEQUENCE`, then clean all variables. If it succeeds, update this file and the changelog with the actual ACK evidence and mark Phase 2-A Complete. Do not start Phase 2-B in this session.
 
-## Phase 1.5 status
+## Existing phase history
 
-- Tauri owns `AppState`, startup commands, stop commands, and status queries; Core owns RuntimeSupervisor and all transport/state logic.
-- RuntimeSupervisor uses a bounded Tokio event channel, a dedicated Tokio runtime thread, persistent queue recovery, and infinite reconnect through WebSocketManager.
-- Mock events enter through `submit_test_event`; they are explicitly marked `mock` and no real scanner is claimed.
-- Fixture coverage validates auth, device list, upload, exact ACK, and connection close behavior.
-- UI reads `get_runtime_status`; current refresh is a low-rate fallback until Tauri event push is added.
-- Tray is not implemented yet.
-
-## Phase 1.75-B status
-
-- Status: Complete as superseded by the Phase 1.75-C runtime integration.
-- Latest dispatcher commit: `ff1ab7c feat: add target scoped upload dispatcher`; module export follow-up: `e6c08dd chore: export upload dispatcher module`.
-- `ServerProfile`, `ServerMode`, immutable target resolution, and global sequence semantics are implemented.
-- `UploadDispatcher` now persists target-scoped delivery rows and exposes claim, exact ACK, recovery, block, cancel, and per-target statistics operations.
-- SQLite migration is additive: existing `upload_queue` and sequence data are preserved; `upload_deliveries` is created if absent.
-- Live per-server WebSocket supervisors, dispatcher wiring in `RuntimeSupervisor`, independent heartbeat/reconnect, and multi-server end-to-end fixture are implemented and verified by Phase 1.75-C.
-- No credentials are stored in the repository. The next implementation phase is Windows Collector and is intentionally not started here.
+Phase 1.75-C is Complete: RuntimeSupervisor -> DispatcherSupervisor -> ServerWorker(s), target delivery persistence, independent WebSocket workers, recovery, heartbeat, ACK isolation, and real backend protocol verification are complete. The old Phase 1.5/1.75-B notes remain below in Git history/docs for continuity.
 
