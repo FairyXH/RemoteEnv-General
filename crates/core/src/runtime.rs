@@ -1,5 +1,6 @@
 use crate::collector::CollectorEvent;
 use crate::config::ClientConfig;
+use crate::dispatcher::DispatcherError;
 use crate::protocol::EnvironmentEnvelope;
 use crate::queue::{QueueError, UploadQueue};
 use crate::state::{StateError, StateStore};
@@ -62,6 +63,15 @@ pub struct RuntimeSupervisor {
 impl RuntimeSupervisor {
     pub fn start(config: ClientConfig, store: StateStore) -> Result<Self, RuntimeError> {
         config.validate().map_err(RuntimeError::Configuration)?;
+        let dispatcher = crate::dispatcher::UploadDispatcher::new(store.clone());
+        let targets: Vec<_> = dispatcher
+            .resolve_targets(&config)
+            .into_iter()
+            .cloned()
+            .collect();
+        if targets.is_empty() {
+            return Err(RuntimeError::Dispatcher(DispatcherError::NoTargets));
+        }
         let (events, mut event_rx) = mpsc::channel::<CollectorEvent>(128);
         let (status_tx, status) = watch::channel(RuntimeStatus::default());
         let (stop, mut stop_rx) = tokio::sync::oneshot::channel();
@@ -215,6 +225,8 @@ impl Runtime {
 pub enum RuntimeError {
     #[error("state error: {0}")]
     State(#[from] StateError),
+    #[error("dispatcher error: {0}")]
+    Dispatcher(#[from] DispatcherError),
     #[error("queue error: {0}")]
     Queue(#[from] QueueError),
     #[error("configuration error: {0}")]
