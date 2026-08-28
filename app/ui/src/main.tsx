@@ -1,114 +1,54 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import "./styles.css";
 
-type CollectorName = "Wi-Fi" | "Bluetooth";
+type Server = { id: string; name: string; url: string; enabled: boolean };
+type Config = { device_id: string; server_mode: "Single" | "Multi"; active_server_id: string | null; server_profiles: Server[]; wifi_enabled: boolean; bluetooth_enabled: boolean; scan_interval_seconds: number };
+type RuntimeStatus = { connection: string; wifi: string; bluetooth: string; pending: number; in_flight: number; blocked: number; uploaded: number; servers: Array<{ profile_id: string; connection: string; pending: number; in_flight: number; blocked: number }>; wifi_runtime: Scan; bluetooth_runtime: Scan };
+type Scan = { enabled: boolean; state: string; network_count?: number | null; device_count?: number | null; last_scan_ms: number | null; duration_ms: number | null; successful_scans: number; failed_scans: number; last_error: string | null };
 
-const collectors: Array<{ name: CollectorName; state: string; count: string }> = [
-  { name: "Wi-Fi", state: "Not implemented", count: "-" },
-  { name: "Bluetooth", state: "Disabled", count: "-" },
-];
+const initialStatus: RuntimeStatus = { connection: "Stopped", wifi: "Stopped", bluetooth: "Stopped", pending: 0, in_flight: 0, blocked: 0, uploaded: 0, servers: [], wifi_runtime: { enabled: false, state: "Stopped", last_scan_ms: null, duration_ms: null, successful_scans: 0, failed_scans: 0, last_error: null }, bluetooth_runtime: { enabled: false, state: "Stopped", last_scan_ms: null, duration_ms: null, successful_scans: 0, failed_scans: 0, last_error: null } };
+const emptyConfig: Config = { device_id: "", server_mode: "Single", active_server_id: null, server_profiles: [], wifi_enabled: false, bluetooth_enabled: false, scan_interval_seconds: 30 };
 
-type RuntimeStatus = {
-  connection: string;
-  wifi: string;
-  wifi_runtime: { enabled: boolean; state: string; network_count: number | null; last_scan_ms: number | null; last_successful_scan_ms: number | null; duration_ms: number | null; last_error: string | null; total_scans: number; successful_scans: number; failed_scans: number };
-  bluetooth: string;
-  bluetooth_runtime: { enabled: boolean; state: string; device_count: number | null; ble_device_count: number; classic_device_count: number; last_scan_ms: number | null; last_successful_scan_ms: number | null; duration_ms: number | null; last_error: string | null; total_scans: number; successful_scans: number; failed_scans: number };
-  pending: number;
-  in_flight: number;
-  blocked: number;
-  uploaded: number;
-  failed: number;
-  servers: Array<{ profile_id: string; connection: string; pending: number; in_flight: number; blocked: number }>;
-};
-
-const initialStatus: RuntimeStatus = {
-  connection: "Disconnected",
-  wifi: "Disabled",
-  wifi_runtime: { enabled: false, state: "Disabled", network_count: null, last_scan_ms: null, last_successful_scan_ms: null, duration_ms: null, last_error: null, total_scans: 0, successful_scans: 0, failed_scans: 0 },
-  bluetooth: "Disabled",
-  bluetooth_runtime: { enabled: false, state: "Disabled", device_count: null, ble_device_count: 0, classic_device_count: 0, last_scan_ms: null, last_successful_scan_ms: null, duration_ms: null, last_error: null, total_scans: 0, successful_scans: 0, failed_scans: 0 },
-  pending: 0,
-  in_flight: 0,
-  blocked: 0,
-  uploaded: 0,
-  failed: 0,
-  servers: [],
-};
+function ago(value: number | null) { if (!value) return "尚未扫描"; return `${Math.max(0, Math.floor((Date.now() - value) / 1000))} 秒前`; }
+function stateText(value: string) { const labels: Record<string, string> = { Ready: "就绪", Running: "运行中", Reconnecting: "正在重连", Connecting: "正在连接", Authenticating: "正在认证", Blocked: "已阻止", Stopped: "已停止", Disabled: "已禁用", Starting: "正在启动", Scanning: "正在扫描", Error: "错误" }; return labels[value] ?? value; }
 
 function App() {
   const [status, setStatus] = React.useState(initialStatus);
-  const [runtimeAvailable, setRuntimeAvailable] = React.useState(false);
-  const [error, setError] = React.useState<string | null>(null);
+  const [config, setConfig] = React.useState(emptyConfig);
+  const [notice, setNotice] = React.useState<string | null>(null);
+  const [editing, setEditing] = React.useState<Server | null>(null);
+  const [dialogOpen, setDialogOpen] = React.useState(false);
+  const [form, setForm] = React.useState({ name: "", url: "", token: "", enabled: true });
+  const [showToken, setShowToken] = React.useState(false);
 
-  React.useEffect(() => {
-    let active = true;
-    const refresh = () => invoke<RuntimeStatus>("get_runtime_status")
-      .then((next) => { if (active) { setStatus(next); setRuntimeAvailable(true); } })
-      .catch(() => { if (active) setRuntimeAvailable(false); });
-    refresh();
-    const timer = window.setInterval(refresh, 1000);
-    return () => { active = false; window.clearInterval(timer); };
+  const reload = React.useCallback(async () => {
+    const [nextStatus, nextConfig] = await Promise.all([invoke<RuntimeStatus>("get_runtime_status"), invoke<Config>("get_desktop_config")]);
+    setStatus(nextStatus); setConfig(nextConfig);
   }, []);
+  React.useEffect(() => { reload().catch(() => setNotice("无法读取应用状态。")); let off: (() => void) | undefined; listen<RuntimeStatus>("runtime_status_changed", (event) => setStatus(event.payload)).then((unlisten) => { off = unlisten; }); return () => off?.(); }, [reload]);
+  const saveOptions = async (next: Partial<Config>) => { try { const result = await invoke<Config>("set_runtime_options", { serverMode: next.server_mode ?? config.server_mode, activeServerId: next.active_server_id ?? config.active_server_id, wifiEnabled: next.wifi_enabled ?? config.wifi_enabled, bluetoothEnabled: next.bluetooth_enabled ?? config.bluetooth_enabled, scanIntervalSeconds: next.scan_interval_seconds ?? config.scan_interval_seconds }); setConfig(result); } catch { setNotice("保存运行时设置失败。") } };
+  const openNew = () => { setEditing(null); setDialogOpen(true); setForm({ name: "", url: "", token: "", enabled: true }); setShowToken(false); };
+  const edit = (server: Server) => { setEditing(server); setDialogOpen(true); setForm({ name: server.name, url: server.url, token: "", enabled: server.enabled }); setShowToken(false); };
+  const saveServer = async () => { try { const result = await invoke<Config>("save_server_profile", { input: { id: editing?.id, ...form } }); setConfig(result); setDialogOpen(false); setEditing(null); setNotice("服务器配置已保存。"); } catch (error) { setNotice(String(error)); } };
+  const testServer = async (id: string) => { setNotice("正在测试连接..."); try { const result = await invoke<{ message: string }>("test_server_profile", { id }); setNotice(result.message); } catch (error) { setNotice(String(error)); } };
+  const removeServer = async (id: string) => { if (!confirm("确定删除此服务器配置吗？")) return; try { setConfig(await invoke<Config>("delete_server_profile", { id })); } catch { setNotice("删除服务器配置失败。") } };
+  const toggle = async () => { try { const next = await invoke<RuntimeStatus>(status.connection === "Stopped" ? "start_runtime" : "stop_runtime"); setStatus(next); } catch (error) { setNotice(String(error)); } };
 
-  const start = () => invoke("start_runtime")
-    .then(() => setError(null))
-    .catch((reason) => setError(String(reason)));
-
-  return (
-    <main className="shell">
-      <header>
-        <div>
-          <p className="eyebrow">ENVIRONMENT COLLECTOR</p>
-          <h1>RemoteEnvCollector</h1>
-        </div>
-        <span className="state"><i /> {runtimeAvailable ? status.connection : "Runtime offline"}</span>
-      </header>
-
-      <section className="connection" aria-label="WebSocket status">
-        <span className="label">WebSocket</span>
-        <strong>{runtimeAvailable ? status.connection : "Disconnected"}</strong>
-        <span className="muted">{error ?? (runtimeAvailable ? "Live Core Runtime status" : "Runtime status is not connected to the Tauri shell yet.")}</span>
-      </section>
-
-      <section className="group" aria-label="Servers">
-        <div className="section-heading"><h2>Servers</h2><span>{status.servers.length} active</span></div>
-        {status.servers.map((server) => (
-          <div className="row" key={server.profile_id}>
-            <div><strong>{server.profile_id}</strong><span>{server.connection}</span></div>
-            <b>{server.pending + server.in_flight} queued</b>
-          </div>
-        ))}
-      </section>
-
-      <section className="group" aria-label="Collectors">
-        <div className="section-heading"><h2>Collectors</h2><span>{status.wifi_runtime.enabled || status.bluetooth_runtime.enabled ? "Enabled" : "Disabled"}</span></div>
-        {collectors.map((collector) => (
-          <div className="row" key={collector.name}>
-            <div><strong>{collector.name}</strong><span>{collector.name === "Wi-Fi" ? status.wifi : status.bluetooth}</span></div>
-            <b>{collector.name === "Wi-Fi" ? (status.wifi_runtime.network_count === null ? "No scan" : `${status.wifi_runtime.network_count} APs`) : (status.bluetooth_runtime.device_count === null ? "No scan" : `${status.bluetooth_runtime.device_count} devices`)}</b>
-          </div>
-        ))}
-      </section>
-
-      {status.wifi_runtime.last_error && <p className="muted">Wi-Fi error: {status.wifi_runtime.last_error}</p>}
-      {status.bluetooth_runtime.last_error && <p className="muted">Bluetooth error: {status.bluetooth_runtime.last_error}</p>}
-
-      <section className="metrics" aria-label="Runtime statistics">
-        <div><span>Upload queue</span><strong>{runtimeAvailable ? `${status.pending} pending / ${status.in_flight} sending` : "Runtime unavailable"}</strong></div>
-        <div><span>Accepted uploads</span><strong>{runtimeAvailable ? status.uploaded : "Runtime unavailable"}</strong></div>
-        <div><span>Wi-Fi scan</span><strong>{status.wifi_runtime.duration_ms === null ? "No scan yet" : `${status.wifi_runtime.duration_ms} ms / ${status.wifi_runtime.total_scans} scans`}</strong></div>
-        <div><span>Bluetooth scan</span><strong>{status.bluetooth_runtime.duration_ms === null ? "No scan yet" : `${status.bluetooth_runtime.duration_ms} ms / ${status.bluetooth_runtime.total_scans} scans`}</strong></div>
-      </section>
-
-      <footer>
-        <button type="button" onClick={start}>Start runtime</button>
-        <span>Phase 1 infrastructure</span>
-      </footer>
-    </main>
-  );
+  return <main className="shell">
+    <header className="topbar"><div><p>远程环境采集器</p><h1>Remote Environment Collector</h1><span className="device">设备 ID: {config.device_id || "正在准备"}</span></div><div className={`status ${status.connection === "Ready" ? "ok" : ""}`}>● {stateText(status.connection)}</div></header>
+    {notice && <div className="notice" role="status">{notice}<button aria-label="关闭提示" onClick={() => setNotice(null)}>×</button></div>}
+    <section className="runtime"><div><h2>运行时</h2><span>{stateText(status.connection)} · 待上传 {status.pending} · 发送中 {status.in_flight}</span></div><button className="primary" onClick={toggle}>{status.connection === "Stopped" ? "启动" : "停止"}</button></section>
+    <section className="panel"><div className="heading"><div><h2>服务器</h2><span>{config.server_mode === "Multi" ? "多服务器模式" : "单服务器模式"}</span></div><button className="icon" title="新增服务器" onClick={openNew}>＋</button></div>
+      <div className="options"><label><input type="radio" checked={config.server_mode === "Single"} onChange={() => saveOptions({ server_mode: "Single" })}/> 单服务器</label><label><input type="radio" checked={config.server_mode === "Multi"} onChange={() => saveOptions({ server_mode: "Multi" })}/> 多服务器</label></div>
+      {config.server_profiles.length === 0 ? <p className="empty">尚未配置服务器。新增后可启动运行时。</p> : config.server_profiles.map(server => { const live = status.servers.find(item => item.profile_id === server.id); return <article className="server" key={server.id}><div><strong>{server.name}</strong><span>{server.url}</span><small>{server.enabled ? "已启用" : "已禁用"} · {stateText(live?.connection ?? "Stopped")}</small></div><div className="actions">{config.server_mode === "Single" && <label title="设为活动服务器"><input type="radio" checked={config.active_server_id === server.id} onChange={() => saveOptions({ active_server_id: server.id })}/></label>}<button title="编辑" onClick={() => edit(server)}>编辑</button><button title="测试连接" onClick={() => testServer(server.id)}>测试</button><button className="danger" title="删除" onClick={() => removeServer(server.id)}>删除</button></div></article> })}
+    </section>
+    <section className="grid"><Collector title="Wi-Fi" subtitle="附近网络" state={status.wifi} count={status.wifi_runtime.network_count ?? null} scan={status.wifi_runtime} enabled={config.wifi_enabled} onToggle={(wifi_enabled) => saveOptions({ wifi_enabled })}/><Collector title="蓝牙" subtitle="BLE + Classic Bluetooth" state={status.bluetooth} count={status.bluetooth_runtime.device_count ?? null} scan={status.bluetooth_runtime} enabled={config.bluetooth_enabled} onToggle={(bluetooth_enabled) => saveOptions({ bluetooth_enabled })}/></section>
+    <section className="panel settings"><div className="heading"><div><h2>采集设置</h2><span>修改后立即应用</span></div></div><label>扫描间隔（秒）<input type="number" min="1" max="3600" value={config.scan_interval_seconds} onChange={event => setConfig({ ...config, scan_interval_seconds: Number(event.target.value) || 1 })} onBlur={() => saveOptions({ scan_interval_seconds: config.scan_interval_seconds })}/></label><div className="queue">上传队列：待上传 {status.pending}，发送中 {status.in_flight}，已阻止 {status.blocked}，已确认 {status.uploaded}</div></section>
+    {dialogOpen && <div className="modal" role="dialog"><div className="dialog"><div className="heading"><h2>{editing ? "编辑服务器" : "新增服务器"}</h2><button className="icon" onClick={() => { setDialogOpen(false); setEditing(null); setForm({ name: "", url: "", token: "", enabled: true }); }}>×</button></div><label>名称<input value={form.name} onChange={event => setForm({ ...form, name: event.target.value })}/></label><label>WebSocket 地址<input placeholder="wss://example.com/envser/ws" value={form.url} onChange={event => setForm({ ...form, url: event.target.value })}/></label><label>令牌{editing && <small>留空则保留已有令牌</small>}<div className="token"><input type={showToken ? "text" : "password"} value={form.token} onChange={event => setForm({ ...form, token: event.target.value })}/><button type="button" onClick={() => setShowToken(!showToken)}>{showToken ? "隐藏" : "显示"}</button></div></label><label><input type="checkbox" checked={form.enabled} onChange={event => setForm({ ...form, enabled: event.target.checked })}/> 启用此服务器</label><div className="dialog-actions"><button onClick={() => { setDialogOpen(false); setEditing(null); setForm({ name: "", url: "", token: "", enabled: true }); }}>取消</button><button className="primary" onClick={saveServer}>保存</button></div></div></div>}
+  </main>;
 }
-
+function Collector({ title, subtitle, state, count, scan, enabled, onToggle }: { title: string; subtitle: string; state: string; count: number | null; scan: Scan; enabled: boolean; onToggle: (enabled: boolean) => void }) { return <section className="panel collector"><div className="heading"><div><h2>{title}</h2><span>{subtitle}</span></div><label className="switch"><input type="checkbox" checked={enabled} onChange={event => onToggle(event.target.checked)}/><i/></label></div><strong className={state === "Ready" ? "ready" : ""}>{stateText(state)}</strong><dl><div><dt>设备数量</dt><dd>{count ?? "-"}</dd></div><div><dt>上次扫描</dt><dd>{ago(scan.last_scan_ms)}</dd></div><div><dt>扫描耗时</dt><dd>{scan.duration_ms ? `${(scan.duration_ms / 1000).toFixed(1)} 秒` : "-"}</dd></div><div><dt>成功 / 失败</dt><dd>{scan.successful_scans} / {scan.failed_scans}</dd></div></dl>{scan.last_error && <p className="error">{title} 扫描失败，将在下个周期重试。</p>}</section> }
 createRoot(document.getElementById("root")!).render(<React.StrictMode><App /></React.StrictMode>);

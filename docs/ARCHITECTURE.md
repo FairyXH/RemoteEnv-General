@@ -22,7 +22,7 @@ Windows / Android / Linux / macOS APIs
 
 Production path: `Platform collector -> normalized CollectorEvent -> RuntimeSupervisor -> UploadDispatcher -> upload_deliveries -> DispatcherSupervisor -> ServerWorker(s) -> independent WebSocket -> RemoteEnvServer`.
 
-Collectors must not call WebSocket APIs directly. UI reads application status snapshots and sends commands; it does not call OS APIs.
+Collectors must not call WebSocket APIs directly. UI reads application status snapshots and sends commands; it does not call OS APIs. Normal runtime updates use the Tauri `runtime_status_changed` event; the status command remains the initial/recovery snapshot path.
 
 ## Ownership
 

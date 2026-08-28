@@ -11,6 +11,8 @@
 
 Shared UI calls Tauri commands. Tauri owns desktop lifecycle and platform integration; Core owns cross-platform runtime, queue, protocol, and persistence. Android Framework integration is reserved for Kotlin/Java behind the Android/Tauri boundary and is not implemented in this phase.
 
+Windows Release 使用 Tauri NSIS 配置，同时提供 Portable 目录包。发版输出统一收集到 `Release/Windows/`，用户数据仍由 Tauri `app_data_dir` 管理。
+
 ```text
 Shared UI -> Tauri -> Windows integration
                  -> Android integration -> Kotlin/Java -> Rust Core

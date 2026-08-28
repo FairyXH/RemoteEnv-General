@@ -446,6 +446,10 @@ impl RuntimeSupervisor {
         self.status.borrow().clone()
     }
 
+    pub fn status_has_changed(&mut self) -> bool {
+        self.status.has_changed().unwrap_or(false)
+    }
+
     pub fn update_config(&self, config: ClientConfig) -> Result<(), RuntimeError> {
         self.config_updates
             .try_send(config)

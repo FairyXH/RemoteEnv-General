@@ -26,6 +26,8 @@ npm run tauri dev
 
 `cargo check --workspace` includes the Tauri crate. Android is intentionally outside the first Windows validation gate.
 
+正式 Windows 发版使用仓库根目录的 `scripts/build-release.ps1`，输出只认 `Release/Windows/`；详细说明见 `docs/RELEASE.md`。UI 和日志文案使用简体中文，后续可在不改变 Core 协议的前提下增加多语言资源层。
+
 While the desktop bundle is missing its icon, validate the implemented Core independently:
 
 ```powershell

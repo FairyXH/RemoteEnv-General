@@ -1,7 +1,5 @@
 [CmdletBinding()]
-param(
-    [switch]$SkipBundle
-)
+param()
 
 $ErrorActionPreference = "Stop"
 $projectRoot = Split-Path -Parent $PSScriptRoot
@@ -43,9 +41,18 @@ Write-Host "构建 React 生产资源..."
 npm --prefix $uiRoot run build
 if ($LASTEXITCODE -ne 0) { throw "React production build 失败。" }
 
-Write-Host "构建 Tauri Release executable..."
-cargo build -p remote-env-desktop --release
-if ($LASTEXITCODE -ne 0) { throw "Tauri Rust Release build 失败。" }
+Write-Host "构建 Tauri Windows Release（包含前端资源和 NSIS）..."
+$tauriCli = Join-Path $uiRoot "node_modules\.bin\tauri.cmd"
+if (-not (Test-Path $tauriCli)) {
+    throw "缺少 Tauri CLI。请先在 app/ui 执行 npm ci。"
+}
+Push-Location $tauriRoot
+try {
+    & $tauriCli build --bundles nsis
+    if ($LASTEXITCODE -ne 0) { throw "Tauri Windows Release 构建失败。" }
+} finally {
+    Pop-Location
+}
 
 $portableRoot = Join-Path $releaseRoot "RemoteEnvCollector"
 New-Item -ItemType Directory -Path $portableRoot -Force | Out-Null
@@ -55,26 +62,15 @@ if (-not (Copy-Artifact $exe $portableRoot)) {
 }
 Rename-Item -Path (Join-Path $portableRoot "remote-env-desktop.exe") -NewName "RemoteEnvCollector.exe"
 
-$bundleCreated = $false
-if (-not $SkipBundle) {
-    $cargoTauri = Get-Command cargo-tauri -ErrorAction SilentlyContinue
-    if ($cargoTauri) {
-        Write-Host "构建 NSIS installer..."
-        cargo tauri build --bundles nsis
-        if ($LASTEXITCODE -ne 0) { throw "Tauri NSIS bundle 失败。" }
-        $bundles = Get-ChildItem -Path (Join-Path $projectRoot "target\release\bundle\nsis") -Filter "*.exe" -File -ErrorAction SilentlyContinue
-        foreach ($bundle in $bundles) {
-            Copy-Item $bundle.FullName (Join-Path $releaseRoot "RemoteEnvCollector-Setup.exe") -Force
-            $bundleCreated = $true
-            break
-        }
-    } else {
-        Write-Warning "未检测到 cargo-tauri；已生成 Portable 包，未生成 NSIS installer。"
-    }
-}
-
 $portableExe = Join-Path $portableRoot "RemoteEnvCollector.exe"
 if (-not (Test-Path $portableExe)) { throw "Portable artifact 不完整。" }
+$installer = Get-ChildItem -Path (Join-Path $projectRoot "target\release\bundle\nsis") -Filter "*.exe" -File -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($null -ne $installer) {
+    Copy-Item $installer.FullName (Join-Path $releaseRoot "RemoteEnvCollector-Setup.exe") -Force
+    $bundleCreated = $true
+} else {
+    throw "未找到 NSIS installer artifact。"
+}
 $metadata = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($portableExe)
 
 Write-Host ""

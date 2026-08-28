@@ -2664,12 +2664,16 @@ dependencies = [
 name = "remote-env-desktop"
 version = "0.2.0"
 dependencies = [
+ "futures-util",
  "remote-env-core",
  "remote-env-platform-windows",
  "serde",
  "serde_json",
  "tauri",
  "tauri-build",
+ "tokio",
+ "tokio-tungstenite",
+ "uuid",
 ]
 
 [[package]]

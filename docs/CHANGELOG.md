@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Phase 2-C Windows Desktop Production (partial)
+
+- Added unified `0.2.0` version declarations and a Windows Release script that builds UI/Rust artifacts into `Release/Windows/`.
+- Enabled Tauri NSIS bundling metadata and application icon configuration.
+- Replaced the starter UI with a Chinese production surface for Runtime, server profile CRUD, token masking, collector options, readable errors, and queue status.
+- Added Tauri runtime status event push, close-to-tray behavior, tray lifecycle actions, graceful Runtime shutdown, and WebSocket/auth/heartbeat server testing.
+- Clean-machine and installer smoke evidence are still pending; this phase remains Partial.
+
+
 ### Phase 2-B Windows Bluetooth Complete
 
 - Completed unified BLE + Classic Bluetooth Collector using WinRT `BluetoothLEAdvertisementWatcher` and native Bluetooth inquiry APIs.

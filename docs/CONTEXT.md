@@ -46,9 +46,13 @@ Status: Partial. All local code and test gates pass, and real Windows hardware s
 - `netsh wlan show networks mode=bssid`: 6 visible SSID groups, multiple BSS entries.
 - Security scan: no `rev1_` matches; `CollectTestor` appears only in the explicit environment-based smoke-test code/docs; no credential value is stored.
 
+## Phase 2-C status
+
+Status: Partial. Windows Release pipeline, unified version `0.2.0`, Chinese desktop UI, server profile CRUD, token masking, runtime status push, and close-to-tray lifecycle are implemented. Portable artifact generation is available through `scripts/build-release.ps1`. Clean-machine execution, installer execution, and final release smoke evidence remain pending.
+
 ## Next step
 
-Run the environment-only real backend Wi-Fi smoke test with user-provided `REMOTE_ENV_TEST_URL`, `REMOTE_ENV_TEST_DEVICE_ID`, `REMOTE_ENV_TEST_TOKEN`, and `REMOTE_ENV_TEST_SEQUENCE`, then clean all variables. If it succeeds, update this file and the changelog with the actual ACK evidence and mark Phase 2-A Complete. Do not start Phase 2-C in this session.
+Run the environment-only real backend Wi-Fi smoke test with user-provided `REMOTE_ENV_TEST_URL`, `REMOTE_ENV_TEST_DEVICE_ID`, `REMOTE_ENV_TEST_TOKEN`, and `REMOTE_ENV_TEST_SEQUENCE`, then clean all variables. Phase 2-C work is now in progress; do not start Phase 3 without confirmation.
 
 ## Existing phase history
 
