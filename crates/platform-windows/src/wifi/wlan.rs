@@ -53,14 +53,17 @@ unsafe fn enumerate(handle: HANDLE, started: Instant) -> Result<WiFiSnapshot, Wi
     let mut networks = Vec::new();
     for index in 0..count {
         let interface = &*base.add(index);
-        // A scan request is asynchronous; the BSS list below represents the driver's current results.
-        let _ = WlanScan(
+        let scan_status = WlanScan(
             handle,
             &interface.InterfaceGuid,
             null_mut(),
             null_mut(),
             null_mut(),
         );
+        if scan_status == 0 {
+            // WlanScan is asynchronous; give the WLAN service time to refresh its BSS cache.
+            std::thread::sleep(std::time::Duration::from_millis(1500));
+        }
         let mut bss: *mut WLAN_BSS_LIST = null_mut();
         let status = WlanGetNetworkBssList(
             handle,

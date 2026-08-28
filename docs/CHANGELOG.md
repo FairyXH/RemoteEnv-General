@@ -7,6 +7,7 @@
 - Added optional RuntimeSupervisor platform scan callback with stop-aware periodic scheduling, dynamic interval/enable updates, blocking isolation, and a 120-second timeout.
 - Wi-Fi runtime status now exposes state, timestamps, AP count, scan counters, duration, and errors to the shared UI.
 - The Tauri desktop starts the Windows WLAN provider through RuntimeSupervisor; uploads continue through the existing dispatcher and delivery rows.
+- Revalidated the Windows WLAN probe with the adapter enabled: 1 interface, 10 BSS observations, and 1501 ms scan duration; `netsh` confirmed the radio was Software On.
 
 ### Phase 1.75-C
 

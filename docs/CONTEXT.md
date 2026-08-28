@@ -6,7 +6,7 @@ Read this file, `ARCHITECTURE.md`, and `DEVELOPMENT.md` before changes. For tran
 
 ## Current state
 
-Phase 2-A implementation is partial: Windows WLAN BSS scanning, normalized observations, mock collector tests, a manual scan example, and Runtime-owned periodic scheduling are implemented. Full Runtime integration coverage and hardware/backend evidence remain.
+Phase 2-A implementation is partial: Windows WLAN BSS scanning, normalized observations, mock collector tests, a manual scan example, Runtime-owned periodic scheduling, and a successful real Windows WLAN probe are implemented. Full Runtime integration coverage and backend upload evidence remain.
 
 ## Completed
 
@@ -44,9 +44,9 @@ Phase 2-A implementation is partial: Windows WLAN BSS scanning, normalized obser
 
 ## Phase 2-A status
 
-Status: Partial. Implemented `windows-sys` WLAN bindings, BSS snapshots, normalization, mock tests, Tauri command, Runtime-owned periodic scheduling, dynamic configuration, blocking isolation, timeout, status propagation, and UI status metrics. Runtime scheduling tests pass. Hardware probe executed with one adapter but zero networks because Software Radio was Off; `netsh` confirmed the interface was powered down. Dedicated Runtime upload fixture and real Wi-Fi backend upload remain unverified.
+Status: Partial. Implemented `windows-sys` WLAN bindings, BSS snapshots, normalization, mock tests, Tauri command, Runtime-owned periodic scheduling, dynamic configuration, blocking isolation, timeout, status propagation, and UI status metrics. Runtime scheduling tests pass. Real Windows probe succeeded after enabling Software Radio: 1 interface, 10 BSS observations, 1501 ms; `netsh` reported Software On and 6 visible SSID groups with multiple BSS entries. Dedicated Runtime upload fixture and real Wi-Fi backend upload remain unverified.
 
-Next step: add the dedicated Runtime-to-`upload_deliveries` Wi-Fi fixture and rerun hardware/backend tests when a WLAN interface is software-enabled.
+Next step: add the dedicated Runtime-to-`upload_deliveries` Wi-Fi fixture and run an environment-only real backend Wi-Fi upload test. Hardware proof is now available when the adapter is enabled.
 
 ## Phase 1.75-C status
 
