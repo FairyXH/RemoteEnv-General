@@ -284,13 +284,17 @@ async fn real_backend_smoke_test_uses_only_runtime_environment_configuration() {
     let device_id =
         std::env::var("REMOTE_ENV_TEST_DEVICE_ID").expect("REMOTE_ENV_TEST_DEVICE_ID is required");
     let token = std::env::var("REMOTE_ENV_TEST_TOKEN").expect("REMOTE_ENV_TEST_TOKEN is required");
+    let sequence = std::env::var("REMOTE_ENV_TEST_SEQUENCE")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .expect("REMOTE_ENV_TEST_SEQUENCE is required");
     let dir = tempdir().unwrap();
     let store = StateStore::open(dir.path().join("state.sqlite3")).unwrap();
     let queue = UploadQueue::new(store, 10);
     let envelope = EnvironmentEnvelope::new(
         &device_id,
         "wifi",
-        1,
+        sequence,
         serde_json::json!({"mock": true, "source": "real-backend-smoke"}),
     );
     queue.enqueue(&envelope).unwrap();

@@ -11,7 +11,8 @@
 - Local multi-server disconnect/recovery fixture coverage and real backend smoke verification remain pending; phase remains Partial.
 - Added `phase175c.rs` with two independent local WebSocket listeners covering RuntimeSupervisor multi-target delivery, reconnect/resend, target removal, and permanent auth failure.
 - Extended Phase 1.75-C coverage with profile replacement, Single-to-Multi transition, rate-limit isolation, heartbeat/auth observation, target delivery-state assertions, and worker heartbeat timeout handling.
-- Added explicit Multi-to-Single-B, ACK-isolation, and missing-pong reconnect integration cases; real backend execution was attempted separately and failed before WebSocket connection due to DNS resolution.
+- Added explicit Multi-to-Single-B, ACK-isolation, and missing-pong reconnect integration cases; corrected-endpoint standalone Python real backend verification later passed the complete TLS/auth/device-list/heartbeat/upload/ACK flow.
+
 
 - Added target-scoped `UploadDispatcher` groundwork and additive SQLite delivery storage for Single/Multi target resolution.
 - Added explicit environment-only real backend smoke-test skeleton; it remains ignored by default and was not executed in this phase.
