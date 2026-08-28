@@ -2,7 +2,7 @@
 
 ## Status
 
-Phase 2-B is **Partial**. The Windows platform crate now contains one unified `BluetoothCollector` with independent BLE and Classic scanner boundaries. A scan produces one `CollectorEvent` with `data_type = "bluetooth"`; scanners do not allocate sequences, touch SQLite, or upload data.
+Phase 2-B is **Partial**. The Windows platform crate contains one unified `BluetoothCollector` with independent BLE and Classic scanner boundaries. A scan produces one `CollectorEvent` with `data_type = "bluetooth"`; scanners do not allocate sequences, touch SQLite, or upload data. `RuntimeSupervisor::start_with_collectors` owns one Bluetooth periodic worker and routes its events through the existing sequence, target delivery, ServerWorker, and ACK path.
 
 ## Model and aggregation
 
@@ -16,7 +16,7 @@ BLE AD parsing covers flags/connectability, complete and shortened local name, 1
 
 Classic discovery uses `BluetoothFindFirstRadio`, `BluetoothFindFirstDevice`, `BluetoothFindNextDevice`, and their close functions from `bluetoothapis.dll` through `windows-sys`. The native structure reliably supplies address, name, class of device, and discovery flags; RSSI and advertisement/service payloads are left unavailable. The synchronous inquiry must be isolated from the Runtime control thread when integrated.
 
-The intended BLE implementation is WinRT `Windows.Devices.Bluetooth.Advertisement.BluetoothLEAdvertisementWatcher`. The `windows` binding dependency is present, but the watcher event lifecycle is not connected yet. The current native BLE scanner therefore reports unavailable rather than producing synthetic data.
+The WinRT `Windows.Devices.Bluetooth.Advertisement.BluetoothLEAdvertisementWatcher` is implemented through the `windows` crate. It starts active scanning, extracts address, RSSI, local name, service UUIDs, manufacturer data, connectability, and Tx power in an event handler, sends observations through a bounded channel, then stops and unregisters the handler at the end of the scan window.
 
 ## Verification
 
@@ -26,8 +26,8 @@ Platform unit tests cover canonical address formatting, standard AD parsing, mal
 cargo run -p remote-env-platform-windows --example windows_bluetooth_scan
 ```
 
-Observed on the validation host: `BLE available: false`, `Classic Bluetooth available: true`, `unique Bluetooth device count: 4`, duration `2567 ms`. This is real Classic inquiry output. No BLE hardware result is claimed.
+Observed on the validation host: `BLE available: true`, `Classic Bluetooth available: true`, `unique Bluetooth device count: 6`, duration `5578 ms`. Both values come from a real WinRT BLE watcher plus native Classic inquiry scan.
 
 ## Remaining Phase 2-B work
 
-Connect the stop-aware WinRT watcher, add one Runtime-owned Bluetooth worker using `bluetooth_enabled` and `scan_interval_seconds`, publish per-source runtime status, add `crates/core/tests/phase2b.rs` single/multi-server/recovery fixtures, expose shared UI status, preserve unknown raw AD sections, and rerun UI build plus all gates. Real backend tests and credentials remain out of scope.
+Add Bluetooth-specific two-server and disconnect/recovery fixtures, dynamic enable/disable coverage, shared UI status rendering, `DataSections()` retention for unknown AD types, and synchronize the remaining phase documents. Real backend tests and credentials remain out of scope.
