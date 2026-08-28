@@ -40,13 +40,13 @@ Release 不向 `Program Files`、项目源码目录或 exe 所在目录写入运
 
 ## 运行行为
 
-主窗口关闭会隐藏到系统托盘，Runtime 继续运行。托盘提供打开、启动运行时、停止运行时和退出。只有托盘的“退出”会停止 Runtime、采集器、服务器 worker 并退出进程。
+主窗口关闭会隐藏到系统托盘，采集服务继续运行。托盘提供打开、启动采集服务、停止采集服务和退出。只有托盘的“退出”会停止采集服务、采集器、服务器 worker 并退出进程。
 
 状态正常通过 `runtime_status_changed` 推送到 UI；首次加载或事件恢复时使用 `get_runtime_status` 快照。Wi-Fi 与 BLE + Classic Bluetooth 共用 Runtime、事件、SQLite delivery 和多服务器上传链路。
 
 ## 故障日志
 
-当前版本把结构化运行状态显示在主界面，包括服务器连接、队列计数、扫描耗时、成功/失败计数和可读的采集错误。采集错误不会打印认证令牌、Cookie 或 Authorization header。运行日志写入 `%APPDATA%\com.remoteenv.collector\logs\collector.log`，最多保留最近 5 MB，超过后轮转为 `collector.log.1`；日志至少记录启动、服务器连接请求、扫描成功/失败和运行时关键错误。收集故障信息时请提供应用版本、Windows 版本、主界面状态和复现时间；不要发送 `state.sqlite3` 或包含令牌的配置内容。
+当前版本把结构化运行状态显示在主界面，包括服务器连接、队列计数、扫描耗时、成功/失败计数和可读的采集错误。采集错误不会打印认证令牌、Cookie 或 Authorization header。运行日志写入 `%APPDATA%\com.remoteenv.collector\logs\collector.log`，最多保留最近 5 MB，超过后轮转为 `collector.log.1`；日志至少记录启动、服务器连接请求、扫描成功/失败和采集服务关键错误。收集故障信息时请提供应用版本、Windows 版本、主界面状态和复现时间；不要发送 `state.sqlite3` 或包含令牌的配置内容。
 
 ## 验收命令
 

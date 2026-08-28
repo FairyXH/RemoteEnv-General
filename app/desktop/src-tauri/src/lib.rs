@@ -629,7 +629,7 @@ fn start_runtime(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<RuntimeStatus, String> {
-    info("收到启动运行时请求");
+    info("收到启动采集服务请求");
     let (store, config) = load_config(&state.state_path)?;
     if config.selected_servers().is_empty() {
         return Err("请先新增并启用至少一个服务器配置。".into());
@@ -742,8 +742,8 @@ pub fn run() {
             init_logging(log_path(&app.handle()).map_err(|error| std::io::Error::other(error))?);
             info("应用启动");
             let open = MenuItem::with_id(app, "open", "打开主窗口", true, None::<&str>)?;
-            let start = MenuItem::with_id(app, "start", "启动运行时", true, None::<&str>)?;
-            let stop = MenuItem::with_id(app, "stop", "停止运行时", true, None::<&str>)?;
+            let start = MenuItem::with_id(app, "start", "启动采集服务", true, None::<&str>)?;
+            let stop = MenuItem::with_id(app, "stop", "停止采集服务", true, None::<&str>)?;
             let exit = MenuItem::with_id(app, "exit", "退出", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&open, &start, &stop, &exit])?;
             let handle = app.handle().clone();
