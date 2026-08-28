@@ -275,8 +275,17 @@ impl StateStore {
         )?;
         Ok(())
     }
-}
 
+    pub fn cancel_target(&self, target_id: &str) -> Result<(), StateError> {
+        let c = self.lock()?;
+        c.execute(
+            "UPDATE upload_deliveries SET status='cancelled' WHERE target_id=?1 AND status IN ('pending','in_flight')",
+            params![target_id],
+        )?;
+        Ok(())
+    }
+}
 use rusqlite::OptionalExtension;
+
 #[allow(dead_code)]
 fn _logging_level(_: LoggingLevel) {}

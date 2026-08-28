@@ -28,6 +28,7 @@ Time is Unix milliseconds. `data_type` must match `^[a-z][a-z0-9_.-]{0,63}$`.
 
 - The client configuration now models `ServerProfile` and `ServerMode`; the same global `(device_id, data_type)` sequence is used for every target.
 - Multi-target delivery storage is present as schema groundwork; dispatcher wiring is still partial.
+- Target selection is immutable after an event is persisted: changing mode or disabling a profile affects future events only. Removing a server should cancel its pending deliveries rather than leave them indefinitely pending.
 
 ## Documentation difference
 

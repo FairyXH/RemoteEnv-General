@@ -1,6 +1,7 @@
 use futures_util::{SinkExt, StreamExt};
 use remote_env_core::collector::CollectorEvent;
 use remote_env_core::config::{ClientConfig, LoggingLevel};
+use remote_env_core::dispatcher::UploadDispatcher;
 use remote_env_core::protocol::{Ack, EnvironmentEnvelope, ErrorFrame};
 use remote_env_core::queue::{QueueError, UploadQueue};
 use remote_env_core::runtime::CollectorStatus;
@@ -313,6 +314,56 @@ async fn real_backend_smoke_test_uses_only_runtime_environment_configuration() {
         "real backend did not complete upload/ACK window"
     );
     assert_eq!(queue.pending_count().unwrap(), 0);
+}
+
+#[test]
+fn dispatcher_resolves_targets_and_acknowledges_only_the_selected_server() {
+    let dir = tempdir().unwrap();
+    let store = StateStore::open(dir.path().join("state.sqlite3")).unwrap();
+    let dispatcher = UploadDispatcher::new(store);
+    let mut config = ClientConfig::default();
+    config.server_profiles = vec![
+        remote_env_core::config::ServerProfile {
+            id: "a".into(),
+            name: "A".into(),
+            url: "ws://a".into(),
+            token: "a".into(),
+            enabled: true,
+        },
+        remote_env_core::config::ServerProfile {
+            id: "b".into(),
+            name: "B".into(),
+            url: "ws://b".into(),
+            token: "b".into(),
+            enabled: true,
+        },
+    ];
+    config.active_server_id = Some("a".into());
+    let envelope =
+        EnvironmentEnvelope::new("device-a", "wifi", 1, serde_json::json!({"mock": true}));
+    assert_eq!(dispatcher.persist_event(&config, &envelope).unwrap(), 1);
+    config.server_mode = remote_env_core::config::ServerMode::Multi;
+    let envelope_two =
+        EnvironmentEnvelope::new("device-a", "wifi", 2, serde_json::json!({"mock": true}));
+    assert_eq!(dispatcher.persist_event(&config, &envelope_two).unwrap(), 2);
+    let item = dispatcher.claim_next("b").unwrap().unwrap();
+    assert!(
+        dispatcher
+            .acknowledge(
+                "b",
+                item.0,
+                &Ack {
+                    device_id: "device-a".into(),
+                    data_type: "wifi".into(),
+                    sequence: 2
+                },
+                &item.1
+            )
+            .unwrap()
+    );
+    assert_eq!(dispatcher.status("a", "Ready").unwrap().pending, 2);
+    assert_eq!(dispatcher.status("b", "Ready").unwrap().pending, 0);
+    assert_eq!(dispatcher.status("b", "Ready").unwrap().in_flight, 0);
 }
 
 #[test]

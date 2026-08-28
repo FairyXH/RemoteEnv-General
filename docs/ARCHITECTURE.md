@@ -46,3 +46,7 @@ Collectors must not call WebSocket APIs directly. UI reads application status sn
 ## Multi-server configuration
 
 `ClientConfig` contains `ServerProfile` records (`id`, `name`, `url`, `token`, `enabled`) and `ServerMode::{Single, Multi}`. Single mode selects `active_server_id`; Multi mode selects all enabled profiles. Tokens are persisted with the local configuration store but are never included in status snapshots or logs. The delivery table has been added as schema groundwork; the active runtime still uses the legacy single queue until target dispatch is completed.
+
+## Phase 1.75-B dispatcher
+
+`UploadDispatcher` resolves the target set once per event and stores one `upload_deliveries` row per selected server. The global `(device_id, data_type, sequence)` is reused for all targets. ACK, recovery, block, cancel, and status operations are scoped by `target_id`; the dispatcher does not yet own live per-profile WebSocket workers.
