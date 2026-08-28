@@ -1,6 +1,6 @@
 use crate::config::{DeviceIdentity, ServerProfile};
 use crate::dispatcher::UploadDispatcher;
-use crate::protocol::{Ack, AuthFrame, HeartbeatFrame};
+use crate::protocol::{Ack, AuthFrame};
 use crate::transport::{
     Backoff, ConnectionState, HeartbeatMonitor, ServerEvent, classify_server_message,
 };
@@ -245,6 +245,12 @@ impl ServerWorker {
         loop {
             if in_flight.is_none() {
                 if let Some(item) = self.dispatcher.claim_next(&self.profile.id)? {
+                    if item.1.device_id != self.identity.device_id {
+                        self.dispatcher.block(&self.profile.id, item.0)?;
+                        self.status.last_error = Some(format!("本地待上传数据的 device_id 与当前认证身份不一致: auth_device_id={}, envelope_device_id={}, profile_id={}", self.identity.device_id, item.1.device_id, self.profile.id));
+                        self.refresh_counts();
+                        continue;
+                    }
                     socket
                         .send(Message::Text(
                             serde_json::to_string(&item.1)
@@ -263,8 +269,7 @@ impl ServerWorker {
                     if self.heartbeat_monitor.is_timed_out() {
                         return Err(WorkerError::Transport);
                     }
-                    let frame = HeartbeatFrame { r#type: "heartbeat".into(), timestamp: now_ms() };
-                    socket.send(Message::Text(serde_json::to_string(&frame).map_err(|_| WorkerError::Protocol)?.into())).await.map_err(|_| WorkerError::Transport)?;
+                    socket.send(Message::Text(r#"{"type":"ping"}"#.into())).await.map_err(|_| WorkerError::Transport)?;
                 }
                 message = socket.next() => {
                     let Some(message) = message else { return Err(WorkerError::Transport); };
@@ -282,6 +287,16 @@ impl ServerWorker {
                             if !self.dispatcher.acknowledge(&self.profile.id, id, &ack, &envelope)? { return Err(WorkerError::Protocol); }
                             self.status.uploaded = self.status.uploaded.saturating_add(1);
                             self.refresh_counts();
+                        }
+                        ServerEvent::Invalid => return Err(WorkerError::Blocked(format!("服务器返回未知协议消息: {}", value))),
+                        ServerEvent::SequenceRejected | ServerEvent::FatalError if value["code"] == "unknown_device" => {
+                            if let Some((id, envelope)) = in_flight.take() {
+                                self.dispatcher.block(&self.profile.id, id)?;
+                                self.status.last_error = Some(format!("服务器拒绝数据设备身份: profile_id={}, auth_device_id={}, envelope_device_id={}, response={}", self.profile.id, self.identity.device_id, envelope.device_id, value));
+                                self.refresh_counts();
+                                return Err(WorkerError::Blocked(self.status.last_error.clone().unwrap()));
+                            }
+                            return Err(WorkerError::Blocked(format!("服务器拒绝设备身份: {}", value)));
                         }
                         ServerEvent::SequenceRejected | ServerEvent::FatalError => {
                             if let Some((id, _)) = in_flight.take() { self.dispatcher.block(&self.profile.id, id)?; }

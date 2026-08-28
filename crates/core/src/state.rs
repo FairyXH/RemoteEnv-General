@@ -359,6 +359,34 @@ impl StateStore {
         Ok(())
     }
 
+    pub fn cancel_target_delivery(&self, target_id: &str, id: i64) -> Result<(), StateError> {
+        let c = self.lock()?;
+        c.execute(
+            "UPDATE upload_deliveries SET status='cancelled' WHERE target_id=?1 AND id=?2 AND status IN ('pending','in_flight','blocked')",
+            params![target_id, id],
+        )?;
+        Ok(())
+    }
+
+    pub fn cancel_target_device(&self, target_id: &str, device_id: &str) -> Result<(), StateError> {
+        let c = self.lock()?;
+        let rows = c
+            .prepare("SELECT id,envelope_json FROM upload_deliveries WHERE target_id=?1 AND status IN ('pending','in_flight')")?
+            .query_map(params![target_id], |r| {
+                let id = r.get::<_, i64>(0)?;
+                let raw = r.get::<_, String>(1)?;
+                Ok((id, raw))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        for (id, raw) in rows {
+            let envelope: EnvironmentEnvelope = serde_json::from_str(&raw)?;
+            if envelope.device_id == device_id {
+                c.execute("UPDATE upload_deliveries SET status='cancelled' WHERE target_id=?1 AND id=?2", params![target_id, id])?;
+            }
+        }
+        Ok(())
+    }
+
     pub fn cancel_target(&self, target_id: &str) -> Result<(), StateError> {
         let c = self.lock()?;
         c.execute(

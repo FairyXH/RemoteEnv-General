@@ -2649,6 +2649,7 @@ name = "remote-env-core"
 version = "0.2.0"
 dependencies = [
  "futures-util",
+ "native-tls",
  "rusqlite",
  "serde",
  "serde_json",
@@ -2667,6 +2668,7 @@ dependencies = [
  "base64 0.22.1",
  "futures-util",
  "log",
+ "native-tls",
  "remote-env-core",
  "remote-env-platform-windows",
  "serde",

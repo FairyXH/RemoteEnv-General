@@ -176,6 +176,10 @@ impl UploadDispatcher {
         Ok(true)
     }
 
+    pub fn cancel_delivery(&self, server_id: &str, id: i64) -> Result<(), DispatcherError> {
+        Ok(self.store.cancel_target_delivery(server_id, id)?)
+    }
+
     pub fn recover(&self, server_id: &str) -> Result<(), DispatcherError> {
         Ok(self.store.recover_target(server_id)?)
     }
