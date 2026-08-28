@@ -196,6 +196,8 @@ fn config(identity: DeviceIdentity, a: &TestServer, b: &TestServer) -> ClientCon
     let mut config = ClientConfig::default();
     let profile_device_id = identity.device_id.clone();
     config.identity = identity;
+    config.scan_interval_seconds = 1;
+    config.upload_interval_seconds = 1;
     config.heartbeat_interval_seconds = 1;
     config.server_profiles = vec![
         ServerProfile {

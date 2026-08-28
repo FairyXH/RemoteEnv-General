@@ -143,6 +143,7 @@ fn config(url: String) -> ClientConfig {
     };
     config.bluetooth_enabled = true;
     config.scan_interval_seconds = 1;
+    config.upload_interval_seconds = 1;
     config.heartbeat_interval_seconds = 1;
     config.server_profiles = vec![ServerProfile {
         id: "bluetooth-server".into(),
@@ -219,6 +220,8 @@ async fn bluetooth_multi_server_ack_isolation_and_recovery_preserve_envelope() {
         hardware: None,
     };
     config.server_mode = ServerMode::Multi;
+    config.scan_interval_seconds = 1;
+    config.upload_interval_seconds = 1;
     config.heartbeat_interval_seconds = 1;
     config.server_profiles = vec![
         ServerProfile {
