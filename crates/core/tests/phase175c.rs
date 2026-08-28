@@ -16,6 +16,7 @@ struct TestServer {
     url: String,
     received: Arc<Mutex<Vec<Value>>>,
     ready: Arc<AtomicUsize>,
+    auth_attempts: Arc<AtomicUsize>,
     ack: Arc<AtomicBool>,
     auth_failure: Arc<AtomicBool>,
     disconnect: Arc<Notify>,
@@ -28,6 +29,7 @@ impl TestServer {
         let url = format!("ws://{}", listener.local_addr().unwrap());
         let received = Arc::new(Mutex::new(Vec::new()));
         let ready = Arc::new(AtomicUsize::new(0));
+        let auth_attempts = Arc::new(AtomicUsize::new(0));
         let ack = Arc::new(AtomicBool::new(true));
         let disconnect = Arc::new(Notify::new());
         let auth_failure = Arc::new(AtomicBool::new(false));
@@ -35,6 +37,7 @@ impl TestServer {
         let task_state = (
             received.clone(),
             ready.clone(),
+            auth_attempts.clone(),
             ack.clone(),
             disconnect.clone(),
             auth_failure.clone(),
@@ -53,9 +56,10 @@ impl TestServer {
                     let Some(Ok(Message::Text(raw))) = socket.next().await else {
                         return;
                     };
+                    state.2.fetch_add(1, Ordering::SeqCst);
                     let auth: Value = serde_json::from_str(&raw).unwrap();
                     assert_eq!(auth["type"], "auth");
-                    if state.4.load(Ordering::SeqCst) {
+                    if state.5.load(Ordering::SeqCst) {
                         let _ = socket.send(Message::Text(r#"{"type":"auth_result","success":false,"message":"invalid token"}"#.into())).await;
                         return;
                     }
@@ -70,10 +74,10 @@ impl TestServer {
                         ))
                         .await;
                     state.1.fetch_add(1, Ordering::SeqCst);
-                    state.5.notify_waiters();
+                    state.6.notify_waiters();
                     loop {
                         let message = tokio::select! {
-                            _ = state.3.notified() => {
+                            _ = state.4.notified() => {
                                 let _ = socket.close(None).await;
                                 break;
                             }
@@ -89,8 +93,8 @@ impl TestServer {
                         match value["type"].as_str() {
                             Some("environment_data") => {
                                 state.0.lock().unwrap().push(value.clone());
-                                state.5.notify_waiters();
-                                if state.2.load(Ordering::SeqCst) {
+                                state.6.notify_waiters();
+                                if state.3.load(Ordering::SeqCst) {
                                     let ack = serde_json::json!({"type":"data_result","success":true,"device_id":value["device_id"],"data_type":value["data_type"],"sequence":value["sequence"]});
                                     let _ =
                                         socket.send(Message::Text(ack.to_string().into())).await;
@@ -111,6 +115,7 @@ impl TestServer {
             url,
             received,
             ready,
+            auth_attempts,
             ack,
             disconnect,
             auth_failure,
@@ -134,6 +139,10 @@ impl TestServer {
             .iter()
             .filter_map(|v| v["sequence"].as_u64())
             .collect()
+    }
+
+    fn auth_attempt_count(&self) -> usize {
+        self.auth_attempts.load(Ordering::SeqCst)
     }
 }
 
@@ -312,5 +321,8 @@ async fn phase_175c_auth_failure_becomes_blocked_without_retry() {
     .await
     .unwrap();
     assert_eq!(a.ready.load(Ordering::SeqCst), 0);
+    let attempts = a.auth_attempt_count();
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    assert_eq!(a.auth_attempt_count(), attempts);
     runtime.stop();
 }
