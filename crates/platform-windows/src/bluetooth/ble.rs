@@ -37,3 +37,19 @@ impl BleScanner for NativeBleScanner {
     fn scan(&self) -> Result<Vec<BluetoothObservation>, BluetoothError> { Err(BluetoothError::Unavailable("WinRT advertisement watcher unavailable in this build".into())) }
     fn available(&self) -> bool { false }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn parses_standard_ad_fields_and_ignores_truncated_field() {
+        let raw = [2, 0x01, 0x06, 5, 0x09, b'T', b'a', b'g', b'1', 3, 0x0A, 0xC3, 0x00, 5, 0xFF, 0x4C, 0x00, 0x01, 0x02, 3, 0x19, 0x34, 0x12, 4, 0x16, 0xAA, 0xFE, 0x01, 5, 0x03, 0x0D, 0x18, 0x0F, 0x18, 8, 0xFF, 0x01];
+        let parsed = parse_advertisement(&raw);
+        assert_eq!(parsed.name.as_deref(), Some("Tag1"));
+        assert_eq!(parsed.tx_power, Some(-61));
+        assert_eq!(parsed.appearance, Some(0x1234));
+        assert_eq!(parsed.manufacturer_data[0].company_id, 0x004C);
+        assert_eq!(parsed.service_data[0].uuid, "FEAA");
+        assert_eq!(parsed.service_uuids, vec!["180D", "180F"]);
+    }
+}

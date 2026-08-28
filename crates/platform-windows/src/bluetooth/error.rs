@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-#[derive(Debug, Error)]
+#[derive(Debug, Clone, Error)]
 pub enum BluetoothError {
     #[error("Bluetooth API error {0}")]
     Api(u32),
