@@ -1,13 +1,13 @@
 [package]
 name = "remote-env-desktop"
-version = "0.1.0"
+version.workspace = true
 description = "RemoteEnvCollector desktop/mobile shell"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
 [package.metadata.tauri-winres]
-icon_path = ""
+icon_path = "icons/icon.ico"
 
 [lib]
 name = "remote_env_desktop_lib"
