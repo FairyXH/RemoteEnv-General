@@ -1,4 +1,9 @@
 pub mod collector;
+pub mod config;
+pub mod protocol;
+pub mod queue;
+pub mod state;
+pub mod transport;
 
 #[derive(Debug, thiserror::Error)]
 pub enum CoreError {

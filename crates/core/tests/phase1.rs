@@ -1,0 +1,160 @@
+use remote_env_core::config::{ClientConfig, LoggingLevel};
+use remote_env_core::protocol::{Ack, EnvironmentEnvelope, ErrorFrame};
+use remote_env_core::queue::{QueueError, UploadQueue};
+use remote_env_core::state::StateStore;
+use remote_env_core::transport::{
+    Backoff, ConnectionState, HeartbeatMonitor, ServerEvent, classify_server_message, matches_ack,
+};
+use tempfile::tempdir;
+
+#[test]
+fn sequence_is_atomic_and_survives_reopen() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("state.sqlite3");
+    let store = StateStore::open(&path).unwrap();
+    assert_eq!(store.next_sequence("device-a", "wifi").unwrap(), 1);
+    assert_eq!(store.next_sequence("device-a", "wifi").unwrap(), 2);
+    drop(store);
+    let reopened = StateStore::open(&path).unwrap();
+    assert_eq!(reopened.next_sequence("device-a", "wifi").unwrap(), 3);
+    reopened.recover_sequence("device-a", "wifi", 10).unwrap();
+    assert_eq!(reopened.next_sequence("device-a", "wifi").unwrap(), 11);
+}
+
+#[test]
+fn identity_is_created_once_and_config_is_round_trippable() {
+    let dir = tempdir().unwrap();
+    let store = StateStore::open(dir.path().join("state.sqlite3")).unwrap();
+    let first = store
+        .load_or_create_identity("Desktop", "windows", "1.0")
+        .unwrap();
+    let second = store
+        .load_or_create_identity("Changed", "windows", "2.0")
+        .unwrap();
+    assert_eq!(first.device_id, second.device_id);
+    assert_eq!(second.device_name, "Desktop");
+    let config = ClientConfig {
+        server_url: "ws://example.invalid/ws".into(),
+        token: "secret".into(),
+        identity: first,
+        wifi_enabled: true,
+        ble_enabled: false,
+        classic_bluetooth_enabled: false,
+        scan_interval_seconds: 30,
+        heartbeat_interval_seconds: 15,
+        max_queue_size: 100,
+        log_level: LoggingLevel::Info,
+    };
+    store.save_config(&config).unwrap();
+    assert_eq!(
+        store.load_config().unwrap().unwrap().server_url,
+        config.server_url
+    );
+}
+
+#[test]
+fn queue_is_bounded_and_ack_requires_exact_identity() {
+    let dir = tempdir().unwrap();
+    let store = StateStore::open(dir.path().join("state.sqlite3")).unwrap();
+    let queue = UploadQueue::new(store, 1);
+    let envelope =
+        EnvironmentEnvelope::new("device-a", "wifi", 1, serde_json::json!({"networks": []}));
+    queue.enqueue(&envelope).unwrap();
+    assert!(matches!(
+        queue.enqueue(&envelope),
+        Err(QueueError::Full { .. })
+    ));
+    assert!(!matches_ack(
+        &Ack {
+            device_id: "device-b".into(),
+            data_type: "wifi".into(),
+            sequence: 1
+        },
+        &envelope
+    ));
+    assert!(matches_ack(
+        &Ack {
+            device_id: "device-a".into(),
+            data_type: "wifi".into(),
+            sequence: 1
+        },
+        &envelope
+    ));
+}
+
+#[test]
+fn backoff_is_capped_and_state_is_explicit() {
+    let mut backoff = Backoff::new(1, 30);
+    assert_eq!(backoff.next_delay_seconds(), 1);
+    assert_eq!(backoff.next_delay_seconds(), 2);
+    for _ in 0..10 {
+        backoff.next_delay_seconds();
+    }
+    assert_eq!(backoff.next_delay_seconds(), 30);
+    backoff.reset();
+    assert_eq!(backoff.next_delay_seconds(), 1);
+    assert_eq!(ConnectionState::Ready.to_string(), "Ready");
+}
+
+#[test]
+fn protocol_serializes_server_envelope_and_classifies_sequence_error() {
+    let envelope =
+        EnvironmentEnvelope::new("device-a", "wifi", 7, serde_json::json!({"networks": []}));
+    let json = serde_json::to_value(&envelope).unwrap();
+    assert_eq!(json["type"], "environment_data");
+    assert_eq!(json["version"], 1);
+    let error = ErrorFrame {
+        code: "sequence_rejected".into(),
+        message: "sequence is not newer".into(),
+        retryable: true,
+    };
+    assert!(error.requires_sequence_recovery());
+}
+
+#[test]
+fn queue_recovery_resets_in_flight_items() {
+    let dir = tempdir().unwrap();
+    let store = StateStore::open(dir.path().join("state.sqlite3")).unwrap();
+    let queue = UploadQueue::new(store, 10);
+    let envelope = EnvironmentEnvelope::new("device-a", "wifi", 1, serde_json::json!({}));
+    queue.enqueue(&envelope).unwrap();
+    let claimed = queue.claim_next().unwrap().unwrap();
+    assert_eq!(claimed.envelope.sequence, 1);
+    queue.recover_in_flight().unwrap();
+    assert_eq!(queue.pending_count().unwrap(), 1);
+}
+
+#[test]
+fn transport_classifies_ack_errors_and_heartbeat_contract() {
+    assert_eq!(
+        classify_server_message("data_result", None),
+        ServerEvent::Ack
+    );
+    assert_eq!(
+        classify_server_message("error", Some("sequence_rejected")),
+        ServerEvent::SequenceRejected
+    );
+    assert_eq!(
+        classify_server_message("error", Some("rate_limited")),
+        ServerEvent::RetryableError
+    );
+    let monitor = HeartbeatMonitor::new(
+        std::time::Duration::from_secs(15),
+        std::time::Duration::from_secs(45),
+    );
+    assert_eq!(monitor.interval(), std::time::Duration::from_secs(15));
+    assert!(!monitor.is_timed_out());
+}
+
+#[allow(dead_code)]
+fn _queue_type_is_send_sync(_: &UploadQueue) {}
+
+#[test]
+fn invalid_queue_capacity_is_rejected() {
+    let dir = tempdir().unwrap();
+    let store = StateStore::open(dir.path().join("state.sqlite3")).unwrap();
+    assert!(matches!(
+        UploadQueue::try_new(store, 0),
+        Err(QueueError::InvalidCapacity)
+    ));
+}

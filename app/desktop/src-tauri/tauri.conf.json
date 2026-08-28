@@ -13,5 +13,5 @@
     "windows": [{ "title": "RemoteEnvCollector", "width": 480, "height": 620, "resizable": true }],
     "security": { "csp": null }
   },
-  "bundle": { "active": true, "targets": "all" }
+  "bundle": { "active": false, "targets": "all" }
 }

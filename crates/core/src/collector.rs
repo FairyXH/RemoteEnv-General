@@ -8,10 +8,18 @@ pub struct CollectorEvent {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum CollectorKind { Wifi, Ble, ClassicBluetooth }
+pub enum CollectorKind {
+    Wifi,
+    Ble,
+    ClassicBluetooth,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum CapabilityState { Available, Unavailable, NotImplemented }
+pub enum CapabilityState {
+    Available,
+    Unavailable,
+    NotImplemented,
+}
 
 pub trait Collector: Send + Sync {
     fn kind(&self) -> CollectorKind;
