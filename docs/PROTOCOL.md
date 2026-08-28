@@ -38,4 +38,4 @@ Server docs call the success response a generic data result. Runtime code establ
 
 ## Phase 1.75-C test evidence
 
-The runtime integration fixture sends and validates `auth`, `auth_result`, `device_list`, `environment_data`, `data_result`, `heartbeat`, and `pong` frames. A/B receive one immutable envelope per event; target delivery state is persisted separately. `rate_limited` is treated as retryable and does not acknowledge the delivery. Real backend validation is still pending and is never part of the default test suite.
+Real backend validation passed via the standalone Python client against the corrected endpoint. The client completed TLS WebSocket connection, collector authentication, successful `auth_result`, `device_list` reception, timestamped `heartbeat`/`pong`, one marked `environment_data` upload, and a matching successful `data_result` ACK. Credentials were provided only through process environment variables and were removed after testing.

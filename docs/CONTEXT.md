@@ -62,12 +62,11 @@ The fixture has since added explicit A/B delivery-state assertions, heartbeat/au
 
 ## Phase 1.75-B status
 
-- Status: Partial.
+- Status: Complete as superseded by the Phase 1.75-C runtime integration.
 - Latest dispatcher commit: `ff1ab7c feat: add target scoped upload dispatcher`; module export follow-up: `e6c08dd chore: export upload dispatcher module`.
 - `ServerProfile`, `ServerMode`, immutable target resolution, and global sequence semantics are implemented.
 - `UploadDispatcher` now persists target-scoped delivery rows and exposes claim, exact ACK, recovery, block, cancel, and per-target statistics operations.
 - SQLite migration is additive: existing `upload_queue` and sequence data are preserved; `upload_deliveries` is created if absent.
-- Live per-server WebSocket supervisors, dispatcher wiring in `RuntimeSupervisor`, independent heartbeat/reconnect, server CRUD commands, and multi-server end-to-end fixture are not implemented yet.
-- Real backend smoke test was not executed; no credentials are stored in the repository.
-- Next: wire one supervisor per selected ServerProfile, then run local single/multi/reconnect fixtures before real backend smoke testing.
+- Live per-server WebSocket supervisors, dispatcher wiring in `RuntimeSupervisor`, independent heartbeat/reconnect, and multi-server end-to-end fixture are implemented and verified by Phase 1.75-C.
+- No credentials are stored in the repository. The next implementation phase is Windows Collector and is intentionally not started here.
 

@@ -8,14 +8,14 @@
 - DispatcherSupervisor starts one independently stopped worker per selected server and cancels removed targets.
 - ServerWorker exposes per-target state, strict target-scoped ACKs, target-local recovery, capped reconnect, heartbeat, and permanent authentication blocking.
 - Runtime status and the shared UI expose per-server state and real delivery counts.
-- Local multi-server disconnect/recovery fixture coverage and real backend smoke verification remain pending; phase remains Partial.
+- Local multi-server disconnect/recovery fixture coverage and standalone Python real-backend smoke verification passed; Phase 1.75-C is Complete.
 - Added `phase175c.rs` with two independent local WebSocket listeners covering RuntimeSupervisor multi-target delivery, reconnect/resend, target removal, and permanent auth failure.
 - Extended Phase 1.75-C coverage with profile replacement, Single-to-Multi transition, rate-limit isolation, heartbeat/auth observation, target delivery-state assertions, and worker heartbeat timeout handling.
-- Added explicit Multi-to-Single-B, ACK-isolation, and missing-pong reconnect integration cases; corrected-endpoint standalone Python real backend verification later passed the complete TLS/auth/device-list/heartbeat/upload/ACK flow.
+- Corrected-endpoint standalone Python smoke completed TLS/auth/auth_result/device_list/heartbeat/pong/one marked environment_data/data_result ACK successfully; credentials were environment-only and cleaned up afterward.
 
 
 - Added target-scoped `UploadDispatcher` groundwork and additive SQLite delivery storage for Single/Multi target resolution.
-- Added explicit environment-only real backend smoke-test skeleton; it remains ignored by default and was not executed in this phase.
+- The Rust environment-only smoke-test skeleton remains ignored by default; the real backend protocol chain was verified independently with Python.
 - Added Windows WLAN research notes for Phase 2.
 - Phase 1.75-B remains partial: live per-server dispatch and reconnect fixtures are next.
 

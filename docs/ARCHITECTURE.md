@@ -57,4 +57,4 @@ Event completion is target-scoped: an event is complete only when every selected
 
 ### Phase 1.75-C verification status
 
-`crates/core/tests/phase175c.rs` now drives the live `RuntimeSupervisor -> DispatcherSupervisor -> ServerWorker` chain against independent A/B listeners. It verifies dual readiness, identical event envelopes, target-local recovery, Single-to-Multi expansion, profile replacement/removal, rate-limit isolation, heartbeat observation, and authentication blocking. The phase remains Partial until the remaining lifecycle and real-backend checks are executed.
+`crates/core/tests/phase175c.rs` drives the live `RuntimeSupervisor -> DispatcherSupervisor -> ServerWorker` chain against independent A/B listeners. It verifies dual readiness, identical event envelopes, target-local recovery, Single-to-Multi and Multi-to-Single transitions, profile replacement/removal, rate-limit isolation, heartbeat observation, missing-pong reconnect, ACK isolation, and authentication blocking. The phase is Complete after the local gates and standalone Python real-backend verification passed.
