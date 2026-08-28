@@ -160,7 +160,7 @@ impl ClientConfig {
             ServerMode::Single => self
                 .active_server_id
                 .as_deref()
-                .and_then(|id| self.server_profiles.iter().find(|p| p.id == id && p.enabled))
+                .and_then(|id| self.server_profiles.iter().find(|p| p.id == id))
                 .into_iter()
                 .collect(),
             ServerMode::Multi => self.server_profiles.iter().filter(|p| p.enabled).collect(),

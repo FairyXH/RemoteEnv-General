@@ -14,8 +14,6 @@ use std::sync::{
 use std::collections::HashMap;
 use std::thread::JoinHandle;
 use std::time::Duration;
-use tokio::sync::{mpsc, watch};
-use tokio::time::timeout;
 
 fn now_ms() -> i64 {
     std::time::SystemTime::now()
@@ -23,13 +21,8 @@ fn now_ms() -> i64 {
         .unwrap_or_default()
         .as_millis() as i64
 }
-
-fn next_timestamp_sequence(store: &StateStore, device_id: &str, data_type: &str) -> Result<u64, StateError> {
-    let timestamp = now_ms().max(1) as u64;
-    let sequence = timestamp.max(store.latest_sequence(device_id, data_type)?.saturating_add(1));
-    store.recover_sequence(device_id, data_type, sequence)?;
-    Ok(sequence)
-}
+use tokio::sync::{mpsc, watch};
+use tokio::time::timeout;
 
 pub type CollectorScan = std::sync::Arc<dyn Fn() -> Result<CollectorEvent, String> + Send + Sync>;
 
@@ -410,8 +403,13 @@ impl RuntimeSupervisor {
                                         .first()
                                         .map(|profile| profile.device_id.clone())
                                         .unwrap_or_else(|| current_config.identity.device_id.clone());
-                                    let sequence = next_timestamp_sequence(&store, &device_id, &event.data_type).unwrap_or(0);
-                                    let envelope = EnvironmentEnvelope::new(device_id, event.data_type, sequence, event.data);
+                                    let timestamp = now_ms();
+                                    let sequence = store.next_timestamp_sequence(&device_id, &event.data_type).unwrap_or(0);
+                                    let envelope = EnvironmentEnvelope {
+                                        timestamp,
+                                        sequence,
+                                        ..EnvironmentEnvelope::new(device_id, event.data_type, sequence, event.data)
+                                    };
                                     let _ = dispatcher.persist_event(&current_config, &envelope);
                                 }
                             }

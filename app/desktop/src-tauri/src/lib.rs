@@ -429,6 +429,9 @@ fn set_server_enabled(
     if enabled && config.server_mode == ServerMode::Single {
         config.active_server_id = Some(id.clone());
     }
+    if !enabled && config.active_server_id.as_deref() == Some(id.as_str()) {
+        config.active_server_id = None;
+    }
     update_runtime(&state, &config)?;
     save_config(&store, &config)?;
     let status = current_status(&state)?;

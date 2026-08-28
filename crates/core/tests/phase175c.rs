@@ -123,7 +123,7 @@ impl TestServer {
                                         socket.send(Message::Text(ack.to_string().into())).await;
                                 }
                             }
-                            Some("heartbeat") | Some("ping") => {
+                            Some("heartbeat") => {
                                 state.8.fetch_add(1, Ordering::SeqCst);
                                 if state.9.load(Ordering::SeqCst) {
                                     let _ = socket

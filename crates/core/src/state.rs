@@ -88,6 +88,25 @@ impl StateStore {
         Ok(sequence.max(sequence_state) as u64)
     }
 
+    pub fn next_timestamp_sequence(&self, device_id: &str, data_type: &str) -> Result<u64, StateError> {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        let connection = self.lock()?;
+        let current: Option<i64> = connection
+            .query_row(
+                "SELECT value FROM sequences WHERE device_id=?1 AND data_type=?2",
+                params![device_id, data_type],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let latest = current.unwrap_or(0).max(timestamp as i64);
+        let latest = latest.saturating_add(1);
+        connection.execute("INSERT INTO sequences(device_id,data_type,value) VALUES(?1,?2,?3) ON CONFLICT(device_id,data_type) DO UPDATE SET value=excluded.value", params![device_id, data_type, latest])?;
+        Ok(latest as u64)
+    }
+
     pub fn load_or_create_identity(
         &self,
         name: &str,

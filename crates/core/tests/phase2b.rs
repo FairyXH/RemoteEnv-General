@@ -181,12 +181,12 @@ async fn bluetooth_event_uses_shared_sequence_and_completes_delivery() {
     .unwrap();
     let payload = received.lock().unwrap()[0].clone();
     assert_eq!(payload["data_type"], "bluetooth");
-    assert_eq!(payload["sequence"], 1);
+    assert!(payload["sequence"].as_u64().unwrap() > 1);
     assert_eq!(payload["data"]["observations"][0]["transport"], "ble");
     assert_eq!(payload["data"]["observations"][1]["transport"], "classic");
     tokio::time::timeout(Duration::from_secs(5), async {
         while !store
-            .event_complete("phase2b-device", "bluetooth", 1)
+            .event_complete("phase2b-device", "bluetooth", payload["sequence"].as_u64().unwrap())
             .unwrap()
         {
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -196,7 +196,7 @@ async fn bluetooth_event_uses_shared_sequence_and_completes_delivery() {
     .unwrap();
     assert_eq!(
         store
-            .delivery_status("bluetooth-server", "phase2b-device", "bluetooth", 1)
+            .delivery_status("bluetooth-server", "phase2b-device", "bluetooth", payload["sequence"].as_u64().unwrap())
             .unwrap()
             .as_deref(),
         Some("completed")
