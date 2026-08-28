@@ -465,3 +465,38 @@ async fn phase_175c_single_to_multi_and_rate_limit_keep_other_target_independent
     );
     runtime.stop();
 }
+
+#[tokio::test]
+async fn phase_175c_profile_url_and_token_changes_replace_worker() {
+    let old_server = TestServer::start().await;
+    let new_server = TestServer::start().await;
+    let other = TestServer::start().await;
+    let dir = tempdir().unwrap();
+    let store = StateStore::open(dir.path().join("state.sqlite3")).unwrap();
+    let identity = DeviceIdentity {
+        device_id: "profile-device".into(),
+        device_name: "fixture".into(),
+        platform: "test".into(),
+        platform_version: "1".into(),
+        client_version: "1".into(),
+        hardware: None,
+    };
+    let mut config = config(identity, &old_server, &other);
+    config.server_profiles.truncate(1);
+    config.server_profiles[0].token = "old-token".into();
+    let mut runtime = RuntimeSupervisor::start(config.clone(), store).unwrap();
+    wait_ready(&runtime, 1).await;
+    old_server
+        .wait_for(|server| !server.auth_frames().is_empty())
+        .await;
+    let mut updated = config;
+    updated.server_profiles[0].url = new_server.url.clone();
+    updated.server_profiles[0].token = "new-token".into();
+    runtime.update_config(updated).unwrap();
+    wait_for_profiles(&runtime, &["a"]).await;
+    new_server
+        .wait_for(|server| !server.auth_frames().is_empty())
+        .await;
+    assert_eq!(new_server.auth_frames()[0]["token"], "new-token");
+    runtime.stop();
+}
