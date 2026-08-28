@@ -9,6 +9,7 @@
 - ServerWorker exposes per-target state, strict target-scoped ACKs, target-local recovery, capped reconnect, heartbeat, and permanent authentication blocking.
 - Runtime status and the shared UI expose per-server state and real delivery counts.
 - Local multi-server disconnect/recovery fixture coverage and real backend smoke verification remain pending; phase remains Partial.
+- Added `phase175c.rs` with two independent local WebSocket listeners covering RuntimeSupervisor multi-target delivery, reconnect/resend, target removal, and permanent auth failure.
 
 - Added target-scoped `UploadDispatcher` groundwork and additive SQLite delivery storage for Single/Multi target resolution.
 - Added explicit environment-only real backend smoke-test skeleton; it remains ignored by default and was not executed in this phase.

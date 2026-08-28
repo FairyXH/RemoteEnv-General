@@ -46,7 +46,7 @@ Phase 1.5 implementation is partial: Core persistence, queue, protocol handling,
 
 Status: Partial. Runtime wiring is present: `RuntimeSupervisor -> DispatcherSupervisor -> ServerWorker(s)`, target delivery persistence is used for new events, and per-server status is exposed to UI. Windows Wi-Fi, BLE, and Classic Bluetooth remain `Not implemented`.
 
-Completion is still blocked until real local two-server parallel, ACK isolation, A disconnect/B continues, in-flight recovery, profile lifecycle, auth-to-Blocked, and end-to-end runtime tests are added and executed; the explicit real-backend smoke test and final UI build are also pending.
+Local dual-server runtime coverage now verifies independent A/B readiness, same-envelope delivery, recovery, Single A -> Single B switching, and authentication blocking. Broader profile lifecycle, rate-limit, explicit ACK-isolation, and the real-backend smoke test remain pending; phase remains Partial.
 - Configuration, stable identity, SQLite-backed sequences, bounded durable queue, ACK matching, heartbeat monitoring, explicit states, and capped infinite retry backoff are implemented.
 - `cargo fmt --check`, `cargo check --workspace`, and `cargo test --workspace` pass. `npm run build` passes.
 
