@@ -20,7 +20,7 @@ Platform adapter crates
 Windows / Android / Linux / macOS APIs
 ```
 
-Production path: `Platform collector -> normalized CollectorEvent -> bounded upload queue -> WebSocket sender -> RemoteEnvServer`.
+Production path: `Platform collector -> normalized CollectorEvent -> RuntimeSupervisor -> UploadDispatcher -> upload_deliveries -> DispatcherSupervisor -> ServerWorker(s) -> independent WebSocket -> RemoteEnvServer`.
 
 Collectors must not call WebSocket APIs directly. UI reads application status snapshots and sends commands; it does not call OS APIs.
 
@@ -48,6 +48,8 @@ Collectors must not call WebSocket APIs directly. UI reads application status sn
 - `ClientConfig` contains `ServerProfile` records (`id`, `name`, `url`, `token`, `enabled`) and `ServerMode::{Single, Multi}`. Single mode selects `active_server_id`; Multi mode selects all enabled profiles. Tokens are persisted with the local configuration store but are never included in status snapshots or logs. The runtime now persists each event only to `upload_deliveries`; the legacy `upload_queue` is retained solely for compatibility and direct legacy APIs.
 
 ## Phase 1.75-B dispatcher
+
+The target-scoped dispatcher groundwork is superseded by the live Phase 1.75-C runtime integration described below.
 
 ## Phase 1.75-C runtime integration
 

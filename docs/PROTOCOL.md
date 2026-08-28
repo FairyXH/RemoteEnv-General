@@ -27,7 +27,7 @@ Time is Unix milliseconds. `data_type` must match `^[a-z][a-z0-9_.-]{0,63}$`.
 - Current server limit: 60 uploads per device per 60 seconds.
 
 - The client configuration now models `ServerProfile` and `ServerMode`; the same global `(device_id, data_type)` sequence is used for every target.
-- Multi-target delivery storage is present as schema groundwork; dispatcher wiring is still partial.
+- Multi-target delivery storage and live dispatcher wiring are implemented in the Phase 1.75-C runtime path.
 - Target selection is immutable after an event is persisted: changing mode or disabling a profile affects future events only. Removing a server should cancel its pending deliveries rather than leave them indefinitely pending.
 - Runtime event persistence now creates one `upload_deliveries` row per immutable target set, reusing the same global sequence for every target.
 - Event completion is true only when all target deliveries are `completed` or `cancelled`; `blocked` remains incomplete and visible.

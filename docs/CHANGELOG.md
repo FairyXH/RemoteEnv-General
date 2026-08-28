@@ -17,7 +17,7 @@
 - Added target-scoped `UploadDispatcher` groundwork and additive SQLite delivery storage for Single/Multi target resolution.
 - The Rust environment-only smoke-test skeleton remains ignored by default; the real backend protocol chain was verified independently with Python.
 - Added Windows WLAN research notes for Phase 2.
-- Phase 1.75-B remains partial: live per-server dispatch and reconnect fixtures are next.
+- Phase 1.75-B groundwork is superseded by the completed Phase 1.75-C live runtime integration.
 
 ### Added
 
