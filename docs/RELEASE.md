@@ -36,7 +36,7 @@ Tauri 使用 Windows 应用数据目录保存 SQLite 状态、身份、服务器
 %APPDATA%\com.remoteenv.collector\
 ```
 
-Release 不向 `Program Files`、项目源码目录或 exe 所在目录写入运行数据。令牌只保存在本地配置存储和连接请求中，UI 默认隐藏，状态快照、日志和错误提示不返回令牌。
+Release 不向 `Program Files`、项目源码目录或 exe 所在目录写入运行数据。令牌只保存在 Windows 当前用户可解密的 DPAPI 保护内容中和连接请求内；旧版本明文配置可兼容读取，并会在下次配置保存时转换为 DPAPI 保护格式。UI 默认隐藏令牌，状态快照、日志和错误提示不返回令牌。
 
 ## 运行行为
 

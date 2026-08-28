@@ -103,6 +103,20 @@ impl ClientConfig {
         {
             return Err("max_queue_size and max_uploads_per_minute are invalid".into());
         }
+        if self.server_mode == ServerMode::Single
+            && !self.server_profiles.is_empty()
+            && self.active_server_id.is_none()
+        {
+            return Err("active_server_id is required in Single server mode".into());
+        }
+        if let Some(active_id) = self.active_server_id.as_deref()
+            && !self
+                .server_profiles
+                .iter()
+                .any(|profile| profile.id == active_id)
+        {
+            return Err("active_server_id must reference an existing server profile".into());
+        }
         for profile in &self.server_profiles {
             if profile.id.trim().is_empty() || profile.name.trim().is_empty() {
                 return Err("server profile id and name are required".into());

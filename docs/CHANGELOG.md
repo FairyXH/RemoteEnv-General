@@ -8,7 +8,8 @@
 - Enabled Tauri NSIS bundling metadata and application icon configuration.
 - Replaced the starter UI with a Chinese production surface for Runtime, server profile CRUD, token masking, collector options, readable errors, and queue status.
 - Added Tauri runtime status event push, close-to-tray behavior, tray lifecycle actions, graceful Runtime shutdown, and WebSocket/auth/heartbeat server testing.
-- Clean-machine and installer smoke evidence are still pending; this phase remains Partial.
+- Added Windows-user DPAPI protection for persisted server Tokens; legacy plaintext configs are migrated on save.
+- Set a restrictive local-resource CSP for the Tauri WebView.
 
 
 ### Phase 2-B Windows Bluetooth Complete

@@ -86,13 +86,117 @@ fn open_store(path: &PathBuf) -> Result<StateStore, String> {
 fn load_config(path: &PathBuf) -> Result<(StateStore, ClientConfig), String> {
     let store = open_store(path)?;
     let mut config = store.load_config().map_err(user_error)?.unwrap_or_default();
+    for profile in &mut config.server_profiles {
+        profile.token = protect::decrypt(&profile.token).map_err(user_error)?;
+    }
     if config.identity.device_id.is_empty() {
         config.identity = store
             .load_or_create_identity("RemoteEnvCollector", "windows", "")
             .map_err(user_error)?;
-        store.save_config(&config).map_err(user_error)?;
+        save_config(&store, &config)?;
     }
     Ok((store, config))
+}
+
+fn save_config(store: &StateStore, config: &ClientConfig) -> Result<(), String> {
+    let mut stored = config.clone();
+    for profile in &mut stored.server_profiles {
+        profile.token = protect::encrypt(&profile.token).map_err(user_error)?;
+    }
+    store.save_config(&stored).map_err(user_error)
+}
+
+#[cfg(windows)]
+mod protect {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    use windows_sys::Win32::{
+        Foundation::{HLOCAL, LocalFree},
+        Security::Cryptography::{CRYPT_INTEGER_BLOB, CryptProtectData, CryptUnprotectData},
+    };
+
+    const PREFIX: &str = "dpapi:v1:";
+
+    pub fn encrypt(value: &str) -> Result<String, String> {
+        if value.is_empty() || value.starts_with(PREFIX) {
+            return Ok(value.to_string());
+        }
+        let input = CRYPT_INTEGER_BLOB {
+            cbData: value.len() as u32,
+            pbData: value.as_ptr() as *mut u8,
+        };
+        let mut output = CRYPT_INTEGER_BLOB {
+            cbData: 0,
+            pbData: std::ptr::null_mut(),
+        };
+        let ok = unsafe {
+            CryptProtectData(
+                &input,
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                0,
+                &mut output,
+            )
+        };
+        if ok == 0 {
+            return Err("无法保护服务器令牌。".into());
+        }
+        let bytes = unsafe { std::slice::from_raw_parts(output.pbData, output.cbData as usize) };
+        let encoded = format!("{PREFIX}{}", STANDARD.encode(bytes));
+        unsafe {
+            LocalFree(output.pbData as HLOCAL);
+        }
+        Ok(encoded)
+    }
+
+    pub fn decrypt(value: &str) -> Result<String, String> {
+        if value.is_empty() || !value.starts_with(PREFIX) {
+            return Ok(value.to_string());
+        }
+        let raw = STANDARD
+            .decode(&value[PREFIX.len()..])
+            .map_err(|_| "服务器令牌存储内容无效。".to_string())?;
+        let input = CRYPT_INTEGER_BLOB {
+            cbData: raw.len() as u32,
+            pbData: raw.as_ptr() as *mut u8,
+        };
+        let mut output = CRYPT_INTEGER_BLOB {
+            cbData: 0,
+            pbData: std::ptr::null_mut(),
+        };
+        let ok = unsafe {
+            CryptUnprotectData(
+                &input,
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                0,
+                &mut output,
+            )
+        };
+        if ok == 0 {
+            return Err("无法读取服务器令牌，请使用当前 Windows 用户重新配置。".into());
+        }
+        let bytes = unsafe { std::slice::from_raw_parts(output.pbData, output.cbData as usize) };
+        let decoded =
+            String::from_utf8(bytes.to_vec()).map_err(|_| "服务器令牌编码无效。".to_string());
+        unsafe {
+            LocalFree(output.pbData as HLOCAL);
+        }
+        decoded
+    }
+}
+
+#[cfg(not(windows))]
+mod protect {
+    pub fn encrypt(value: &str) -> Result<String, String> {
+        Ok(value.to_string())
+    }
+    pub fn decrypt(value: &str) -> Result<String, String> {
+        Ok(value.to_string())
+    }
 }
 
 fn config_view(config: &ClientConfig) -> DesktopConfigView {
@@ -135,7 +239,11 @@ fn current_status(state: &AppState) -> Result<RuntimeStatus, String> {
     Ok(guard
         .as_ref()
         .map(RuntimeSupervisor::status)
-        .unwrap_or_default())
+        .unwrap_or_else(|| {
+            let mut status = RuntimeStatus::default();
+            status.connection = remote_env_core::transport::ConnectionState::Stopped;
+            status
+        }))
 }
 
 #[tauri::command]
@@ -195,8 +303,8 @@ fn save_server_profile(
     config.server_url.clear();
     config.token.clear();
     config.validate().map_err(user_error)?;
-    store.save_config(&config).map_err(user_error)?;
     update_runtime(&state, &config)?;
+    save_config(&store, &config)?;
     Ok(config_view(&config))
 }
 
@@ -213,8 +321,8 @@ fn delete_server_profile(
             .first()
             .map(|profile| profile.id.clone());
     }
-    store.save_config(&config).map_err(user_error)?;
     update_runtime(&state, &config)?;
+    save_config(&store, &config)?;
     Ok(config_view(&config))
 }
 
@@ -236,9 +344,20 @@ fn set_runtime_options(
     config.wifi_enabled = wifi_enabled;
     config.bluetooth_enabled = bluetooth_enabled;
     config.scan_interval_seconds = scan_interval_seconds;
+    if config.server_mode == ServerMode::Single && !config.server_profiles.is_empty() {
+        let active = config.active_server_id.as_deref();
+        if active.is_none()
+            || !config
+                .server_profiles
+                .iter()
+                .any(|profile| Some(profile.id.as_str()) == active)
+        {
+            return Err("单服务器模式必须选择有效的活动服务器。".into());
+        }
+    }
     config.validate().map_err(user_error)?;
-    store.save_config(&config).map_err(user_error)?;
     update_runtime(&state, &config)?;
+    save_config(&store, &config)?;
     Ok(config_view(&config))
 }
 
