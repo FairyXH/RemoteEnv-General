@@ -18,6 +18,7 @@ type RuntimeStatus = {
   blocked: number;
   uploaded: number;
   failed: number;
+  servers: Array<{ profile_id: string; connection: string; pending: number; in_flight: number; blocked: number }>;
 };
 
 const initialStatus: RuntimeStatus = {
@@ -27,6 +28,7 @@ const initialStatus: RuntimeStatus = {
   blocked: 0,
   uploaded: 0,
   failed: 0,
+  servers: [],
 };
 
 function App() {
@@ -62,6 +64,16 @@ function App() {
         <span className="label">WebSocket</span>
         <strong>{runtimeAvailable ? status.connection : "Disconnected"}</strong>
         <span className="muted">{error ?? (runtimeAvailable ? "Live Core Runtime status" : "Runtime status is not connected to the Tauri shell yet.")}</span>
+      </section>
+
+      <section className="group" aria-label="Servers">
+        <div className="section-heading"><h2>Servers</h2><span>{status.servers.length} active</span></div>
+        {status.servers.map((server) => (
+          <div className="row" key={server.profile_id}>
+            <div><strong>{server.profile_id}</strong><span>{server.connection}</span></div>
+            <b>{server.pending + server.in_flight} queued</b>
+          </div>
+        ))}
       </section>
 
       <section className="group" aria-label="Collectors">

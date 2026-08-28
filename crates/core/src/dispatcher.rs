@@ -1,8 +1,10 @@
-use crate::config::{ClientConfig, ServerProfile};
+use crate::config::{ClientConfig, DeviceIdentity, ServerProfile};
 use crate::protocol::{Ack, EnvironmentEnvelope};
 use crate::state::{StateError, StateStore};
 use crate::transport::ConnectionState;
+use crate::worker::WorkerHandle;
 use serde::Serialize;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,17 +34,6 @@ pub struct ServerTargetStatus {
     pub blocked: usize,
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub struct ServerWorkerStatus {
-    pub profile_id: String,
-    pub connection: ConnectionState,
-    pub pending: usize,
-    pub in_flight: usize,
-    pub blocked: usize,
-    pub uploaded: u64,
-    pub failed: u64,
-}
-
 #[derive(Debug, thiserror::Error)]
 pub enum DispatcherError {
     #[error("state error: {0}")]
@@ -54,6 +45,80 @@ pub enum DispatcherError {
 #[derive(Clone)]
 pub struct UploadDispatcher {
     store: StateStore,
+}
+
+pub struct DispatcherSupervisor {
+    dispatcher: UploadDispatcher,
+    identity: DeviceIdentity,
+    workers: HashMap<String, WorkerHandle>,
+    heartbeat_interval: Duration,
+}
+
+impl DispatcherSupervisor {
+    pub fn new(
+        dispatcher: UploadDispatcher,
+        identity: DeviceIdentity,
+        heartbeat_interval: Duration,
+    ) -> Self {
+        Self {
+            dispatcher,
+            identity,
+            workers: HashMap::new(),
+            heartbeat_interval,
+        }
+    }
+
+    pub async fn apply_config(&mut self, config: &ClientConfig) {
+        let selected = self.dispatcher.resolve_targets(config);
+        let selected_ids: HashSet<&str> =
+            selected.iter().map(|profile| profile.id.as_str()).collect();
+        let removed: Vec<String> = self
+            .workers
+            .keys()
+            .filter(|id| !selected_ids.contains(id.as_str()))
+            .cloned()
+            .collect();
+        for id in removed {
+            if let Some(worker) = self.workers.remove(&id) {
+                worker.stop().await;
+            }
+            let _ = self.dispatcher.cancel_target(&id);
+        }
+        for profile in selected {
+            let replace = self.workers.get(&profile.id).is_some_and(|worker| {
+                worker.profile.url != profile.url || worker.profile.token != profile.token
+            });
+            if replace {
+                if let Some(worker) = self.workers.remove(&profile.id) {
+                    worker.stop().await;
+                }
+                let _ = self.dispatcher.recover(&profile.id);
+            }
+            if !self.workers.contains_key(&profile.id) {
+                let worker = WorkerHandle::start(
+                    profile.clone(),
+                    self.dispatcher.clone(),
+                    self.identity.clone(),
+                    self.heartbeat_interval,
+                );
+                self.workers.insert(profile.id.clone(), worker);
+            }
+        }
+    }
+
+    pub fn statuses(&self) -> Vec<crate::worker::ServerWorkerStatus> {
+        self.workers
+            .values()
+            .map(|worker| worker.status.borrow().clone())
+            .collect()
+    }
+
+    pub async fn stop(&mut self) {
+        let workers = std::mem::take(&mut self.workers);
+        for (_, worker) in workers {
+            worker.stop().await;
+        }
+    }
 }
 
 impl UploadDispatcher {

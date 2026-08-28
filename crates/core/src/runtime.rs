@@ -1,10 +1,11 @@
 use crate::collector::CollectorEvent;
 use crate::config::ClientConfig;
-use crate::dispatcher::DispatcherError;
+use crate::dispatcher::{DispatcherError, DispatcherSupervisor, UploadDispatcher};
 use crate::protocol::EnvironmentEnvelope;
 use crate::queue::{QueueError, UploadQueue};
 use crate::state::{StateError, StateStore};
-use crate::transport::{ConnectionState, WebSocketManager};
+use crate::transport::ConnectionState;
+use crate::worker::ServerWorkerStatus;
 use serde::Serialize;
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -16,7 +17,7 @@ pub enum CollectorStatus {
     Disabled,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct RuntimeStatus {
     pub connection: ConnectionState,
     pub wifi: CollectorStatus,
@@ -27,6 +28,7 @@ pub struct RuntimeStatus {
     pub blocked: usize,
     pub uploaded: u64,
     pub failed: u64,
+    pub servers: Vec<ServerWorkerStatus>,
 }
 
 impl Default for RuntimeStatus {
@@ -41,6 +43,7 @@ impl Default for RuntimeStatus {
             blocked: 0,
             uploaded: 0,
             failed: 0,
+            servers: Vec::new(),
         }
     }
 }
@@ -63,13 +66,8 @@ pub struct RuntimeSupervisor {
 impl RuntimeSupervisor {
     pub fn start(config: ClientConfig, store: StateStore) -> Result<Self, RuntimeError> {
         config.validate().map_err(RuntimeError::Configuration)?;
-        let dispatcher = crate::dispatcher::UploadDispatcher::new(store.clone());
-        let targets: Vec<_> = dispatcher
-            .resolve_targets(&config)
-            .into_iter()
-            .cloned()
-            .collect();
-        if targets.is_empty() {
+        let dispatcher = UploadDispatcher::new(store.clone());
+        if dispatcher.resolve_targets(&config).is_empty() {
             return Err(RuntimeError::Dispatcher(DispatcherError::NoTargets));
         }
         let (events, mut event_rx) = mpsc::channel::<CollectorEvent>(128);
@@ -80,57 +78,41 @@ impl RuntimeSupervisor {
             .spawn(move || {
                 let Ok(runtime) = tokio::runtime::Runtime::new() else { return; };
                 runtime.block_on(async move {
-                    let queue = UploadQueue::new(store.clone(), config.max_queue_size as usize);
-                    let mut manager = WebSocketManager::new(Duration::from_secs(config.heartbeat_interval_seconds));
-                    let identity = config.identity.clone();
-                    let mut snapshot = RuntimeStatus::default();
-                    let event_queue = queue.clone();
+                    let dispatcher = UploadDispatcher::new(store.clone());
+                    let mut supervisor = DispatcherSupervisor::new(dispatcher.clone(), config.identity.clone(), Duration::from_secs(config.heartbeat_interval_seconds));
+                    supervisor.apply_config(&config).await;
                     let event_store = store.clone();
-                    let event_identity = identity.clone();
+                    let event_dispatcher = dispatcher.clone();
+                    let event_config = config.clone();
+                    let event_identity = config.identity.clone();
                     let event_task = tokio::spawn(async move {
                         while let Some(event) = event_rx.recv().await {
                             let Ok(sequence) = event_store.next_sequence(&event_identity.device_id, &event.data_type) else { continue; };
                             let envelope = EnvironmentEnvelope::new(event_identity.device_id.clone(), event.data_type, sequence, event.data);
-                            let _ = event_queue.enqueue(&envelope);
+                            let _ = event_dispatcher.persist_event(&event_config, &envelope);
                         }
                     });
-                    loop {
-                        tokio::select! {
-                            _ = &mut stop_rx => {
-                                manager.stop();
-                                event_task.abort();
-                                snapshot.connection = ConnectionState::Stopped;
+                    tokio::select! {
+                        _ = &mut stop_rx => {},
+                        _ = async {
+                            loop {
+                                let servers = supervisor.statuses();
+                                let mut snapshot = RuntimeStatus::default();
+                                snapshot.connection = if servers.iter().any(|s| s.connection == ConnectionState::Ready) { ConnectionState::Ready } else { ConnectionState::Reconnecting };
+                                snapshot.servers = servers;
+                                snapshot.pending = snapshot.servers.iter().map(|s| s.pending).sum();
+                                snapshot.in_flight = snapshot.servers.iter().map(|s| s.in_flight).sum();
+                                snapshot.blocked = snapshot.servers.iter().map(|s| s.blocked).sum();
                                 let _ = status_tx.send(snapshot);
-                                break;
+                                tokio::time::sleep(Duration::from_millis(100)).await;
                             }
-                            result = manager.run_once(&config.server_url, &config.token, &identity, &queue) => {
-                                if result.is_ok() { snapshot.uploaded = snapshot.uploaded.saturating_add(1); }
-                                else {
-                                    snapshot.failed = snapshot.failed.saturating_add(1);
-                                    let _ = queue.recover_in_flight();
-                                }
-                                manager.mark_reconnecting();
-                                snapshot.connection = ConnectionState::Reconnecting;
-                                let _ = status_tx.send(snapshot);
-                                let delay = manager.next_reconnect_delay();
-                                tokio::select! {
-                                    _ = tokio::time::sleep(delay) => {}
-                                    _ = &mut stop_rx => {
-                                        manager.stop();
-                                        snapshot.connection = ConnectionState::Stopped;
-                                        let _ = status_tx.send(snapshot);
-                                        event_task.abort();
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                        snapshot.connection = manager.state;
-                        snapshot.pending = queue.pending_count().unwrap_or(0);
-                        snapshot.in_flight = queue.in_flight_count().unwrap_or(0);
-                        snapshot.blocked = queue.blocked_count().unwrap_or(0);
-                        let _ = status_tx.send(snapshot);
+                        } => {}
                     }
+                    event_task.abort();
+                    supervisor.stop().await;
+                    let mut snapshot = RuntimeStatus::default();
+                    snapshot.connection = ConnectionState::Stopped;
+                    let _ = status_tx.send(snapshot);
                 });
             })
             .map_err(|error| RuntimeError::Thread(error.to_string()))?;
@@ -149,7 +131,7 @@ impl RuntimeSupervisor {
     }
 
     pub fn status(&self) -> RuntimeStatus {
-        *self.status.borrow()
+        self.status.borrow().clone()
     }
 
     pub fn stop(&mut self) {
@@ -217,6 +199,7 @@ impl Runtime {
             blocked: self.queue.blocked_count()?,
             uploaded: self.uploaded,
             failed: self.failed,
+            servers: Vec::new(),
         })
     }
 }

@@ -64,7 +64,7 @@ fn start_runtime(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<()
             .load_or_create_identity("RemoteEnvCollector", "windows", "unknown")
             .map_err(|e| e.to_string())?;
     }
-    if config.token.is_empty() {
+    if config.token.is_empty() && config.server_profiles.is_empty() {
         return Err("configure server URL and token before starting runtime".into());
     }
     *guard =

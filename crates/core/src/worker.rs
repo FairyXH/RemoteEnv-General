@@ -1,14 +1,15 @@
 use crate::config::{DeviceIdentity, ServerProfile};
 use crate::dispatcher::UploadDispatcher;
-use crate::protocol::{AuthFrame, HeartbeatFrame};
+use crate::protocol::{Ack, AuthFrame, HeartbeatFrame};
 use crate::transport::{Backoff, ConnectionState, ServerEvent, classify_server_message};
 use futures_util::{SinkExt, StreamExt};
 use serde::Serialize;
 use serde_json::Value;
 use std::time::Duration;
+use tokio::sync::{oneshot, watch};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ServerWorkerStatus {
     pub profile_id: String,
     pub connection: ConnectionState,
@@ -19,51 +20,149 @@ pub struct ServerWorkerStatus {
     pub failed: u64,
 }
 
+impl ServerWorkerStatus {
+    pub fn new(profile_id: String) -> Self {
+        Self {
+            profile_id,
+            connection: ConnectionState::Stopped,
+            pending: 0,
+            in_flight: 0,
+            blocked: 0,
+            uploaded: 0,
+            failed: 0,
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum WorkerError {
     #[error("worker transport failed")]
     Transport,
     #[error("worker protocol failed")]
     Protocol,
+    #[error("worker authentication is blocked: {0}")]
+    Blocked(String),
     #[error("worker dispatcher failed: {0}")]
     Dispatcher(#[from] crate::dispatcher::DispatcherError),
+}
+
+pub struct WorkerHandle {
+    pub profile_id: String,
+    pub profile: ServerProfile,
+    pub status: watch::Receiver<ServerWorkerStatus>,
+    stop: Option<oneshot::Sender<()>>,
+    join: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl WorkerHandle {
+    pub fn start(
+        profile: ServerProfile,
+        dispatcher: UploadDispatcher,
+        identity: DeviceIdentity,
+        heartbeat_interval: Duration,
+    ) -> Self {
+        let profile_id = profile.id.clone();
+        let (status_tx, status) = watch::channel(ServerWorkerStatus::new(profile_id.clone()));
+        let (stop, stop_rx) = oneshot::channel();
+        let join = tokio::spawn(
+            ServerWorker::new(
+                profile.clone(),
+                dispatcher,
+                identity,
+                status_tx,
+                heartbeat_interval,
+            )
+            .run(stop_rx),
+        );
+        Self {
+            profile_id,
+            profile,
+            status,
+            stop: Some(stop),
+            join: Some(join),
+        }
+    }
+
+    pub fn abort(mut self) {
+        if let Some(stop) = self.stop.take() {
+            let _ = stop.send(());
+        }
+        if let Some(join) = self.join.take() {
+            join.abort();
+        }
+    }
+
+    pub async fn stop(mut self) {
+        if let Some(stop) = self.stop.take() {
+            let _ = stop.send(());
+        }
+        if let Some(join) = self.join.take() {
+            let _ = join.await;
+        }
+    }
 }
 
 pub struct ServerWorker {
     profile: ServerProfile,
     dispatcher: UploadDispatcher,
     identity: DeviceIdentity,
+    status_tx: watch::Sender<ServerWorkerStatus>,
+    status: ServerWorkerStatus,
+    heartbeat_interval: Duration,
 }
 
 impl ServerWorker {
-    pub fn new(
+    fn new(
         profile: ServerProfile,
         dispatcher: UploadDispatcher,
         identity: DeviceIdentity,
+        status_tx: watch::Sender<ServerWorkerStatus>,
+        heartbeat_interval: Duration,
     ) -> Self {
+        let status = ServerWorkerStatus::new(profile.id.clone());
         Self {
             profile,
             dispatcher,
             identity,
+            status_tx,
+            status,
+            heartbeat_interval,
         }
     }
 
-    pub async fn run(self) {
+    async fn run(mut self, mut stop: oneshot::Receiver<()>) {
         let mut backoff = Backoff::new(1, 30);
         loop {
-            let result = self.run_connection().await;
+            self.publish(ConnectionState::Connecting);
+            let result = self.run_connection(&mut stop).await;
             let _ = self.dispatcher.recover(&self.profile.id);
+            self.refresh_counts();
+            if matches!(result, Err(WorkerError::Blocked(_))) {
+                self.publish(ConnectionState::Blocked);
+                return;
+            }
             if result.is_ok() {
                 backoff.reset();
             }
-            tokio::time::sleep(backoff.delay()).await;
+            self.publish(ConnectionState::Reconnecting);
+            let delay = backoff.delay();
+            tokio::select! {
+                _ = tokio::time::sleep(delay) => {},
+                _ = &mut stop => { self.publish(ConnectionState::Stopped); return; }
+            }
         }
     }
 
-    async fn run_connection(&self) -> Result<(), WorkerError> {
-        let (mut socket, _) = connect_async(&self.profile.url)
-            .await
-            .map_err(|_| WorkerError::Transport)?;
+    async fn run_connection(
+        &mut self,
+        stop: &mut oneshot::Receiver<()>,
+    ) -> Result<(), WorkerError> {
+        let connect = connect_async(&self.profile.url);
+        let (mut socket, _) = tokio::select! {
+            _ = &mut *stop => return Ok(()),
+            result = connect => result.map_err(|_| WorkerError::Transport)?,
+        };
+        self.publish(ConnectionState::Connected);
         let auth = AuthFrame::collector(
             &self.profile.token,
             &self.identity,
@@ -77,72 +176,83 @@ impl ServerWorker {
             ))
             .await
             .map_err(|_| WorkerError::Transport)?;
+        self.publish(ConnectionState::Authenticating);
         let auth_result = next_json(&mut socket).await?;
-        if classify_server_message(auth_result["type"].as_str().unwrap_or_default(), None)
-            != ServerEvent::Authenticated
-            || auth_result["success"] != true
-        {
-            return Err(WorkerError::Protocol);
+        if auth_result["type"] != "auth_result" || auth_result["success"] != true {
+            return Err(WorkerError::Blocked(
+                auth_result["message"]
+                    .as_str()
+                    .unwrap_or("authentication failed")
+                    .to_string(),
+            ));
         }
-        let devices = next_json(&mut socket).await?;
-        if classify_server_message(devices["type"].as_str().unwrap_or_default(), None)
-            != ServerEvent::DeviceList
-        {
-            return Err(WorkerError::Protocol);
+        if next_json(&mut socket).await?["type"] != "device_list" {
+            return Err(WorkerError::Blocked(
+                "device_list required after auth_result".into(),
+            ));
         }
+        self.publish(ConnectionState::Ready);
+        let mut heartbeat = tokio::time::interval(self.heartbeat_interval);
+        let mut in_flight = None;
         loop {
-            if let Some((id, envelope)) = self.dispatcher.claim_next(&self.profile.id)? {
-                socket
-                    .send(Message::Text(
-                        serde_json::to_string(&envelope)
-                            .map_err(|_| WorkerError::Protocol)?
-                            .into(),
-                    ))
-                    .await
-                    .map_err(|_| WorkerError::Transport)?;
-                let response = next_json(&mut socket).await?;
-                match classify_server_message(
-                    response["type"].as_str().unwrap_or_default(),
-                    response["code"].as_str(),
-                ) {
-                    ServerEvent::Ack => {
-                        let ack =
-                            serde_json::from_value(response).map_err(|_| WorkerError::Protocol)?;
-                        if self
-                            .dispatcher
-                            .acknowledge(&self.profile.id, id, &ack, &envelope)?
-                        {
-                            continue;
-                        }
-                        return Err(WorkerError::Protocol);
-                    }
-                    ServerEvent::SequenceRejected | ServerEvent::FatalError => {
-                        self.dispatcher.block(&self.profile.id, id)?;
-                        return Err(WorkerError::Protocol);
-                    }
-                    _ => return Err(WorkerError::Protocol),
+            if in_flight.is_none() {
+                if let Some(item) = self.dispatcher.claim_next(&self.profile.id)? {
+                    socket
+                        .send(Message::Text(
+                            serde_json::to_string(&item.1)
+                                .map_err(|_| WorkerError::Protocol)?
+                                .into(),
+                        ))
+                        .await
+                        .map_err(|_| WorkerError::Transport)?;
+                    in_flight = Some(item);
+                    self.refresh_counts();
                 }
             }
-            let heartbeat = HeartbeatFrame {
-                r#type: "heartbeat".into(),
-                timestamp: now_ms(),
-            };
-            socket
-                .send(Message::Text(
-                    serde_json::to_string(&heartbeat)
-                        .map_err(|_| WorkerError::Protocol)?
-                        .into(),
-                ))
-                .await
-                .map_err(|_| WorkerError::Transport)?;
-            let pong = tokio::time::timeout(Duration::from_secs(45), next_json(&mut socket))
-                .await
-                .map_err(|_| WorkerError::Transport)??;
-            if classify_server_message(pong["type"].as_str().unwrap_or_default(), None)
-                != ServerEvent::Pong
-            {
-                return Err(WorkerError::Protocol);
+            tokio::select! {
+                _ = &mut *stop => return Ok(()),
+                _ = heartbeat.tick() => {
+                    let frame = HeartbeatFrame { r#type: "heartbeat".into(), timestamp: now_ms() };
+                    socket.send(Message::Text(serde_json::to_string(&frame).map_err(|_| WorkerError::Protocol)?.into())).await.map_err(|_| WorkerError::Transport)?;
+                }
+                message = socket.next() => {
+                    let Some(message) = message else { return Err(WorkerError::Transport); };
+                    let value = serde_json::from_str::<Value>(message.map_err(|_| WorkerError::Transport)?.to_text().map_err(|_| WorkerError::Protocol)?).map_err(|_| WorkerError::Protocol)?;
+                    match classify_server_message(value["type"].as_str().unwrap_or_default(), value["code"].as_str()) {
+                        ServerEvent::Pong => {},
+                        ServerEvent::Ack => {
+                            let Some((id, envelope)) = in_flight.take() else { continue; };
+                            let ack: Ack = serde_json::from_value(value).map_err(|_| WorkerError::Protocol)?;
+                            if !self.dispatcher.acknowledge(&self.profile.id, id, &ack, &envelope)? { return Err(WorkerError::Protocol); }
+                            self.status.uploaded = self.status.uploaded.saturating_add(1);
+                            self.refresh_counts();
+                        }
+                        ServerEvent::SequenceRejected | ServerEvent::FatalError => {
+                            if let Some((id, _)) = in_flight.take() { self.dispatcher.block(&self.profile.id, id)?; }
+                            return Err(WorkerError::Blocked(value["message"].as_str().unwrap_or("server rejected upload").into()));
+                        }
+                        ServerEvent::RetryableError => return Err(WorkerError::Transport),
+                        _ => {}
+                    }
+                }
             }
+        }
+    }
+
+    fn publish(&mut self, connection: ConnectionState) {
+        self.status.connection = connection;
+        self.refresh_counts();
+        let _ = self.status_tx.send(self.status.clone());
+    }
+    fn refresh_counts(&mut self) {
+        if let Ok(status) = self
+            .dispatcher
+            .target_status(&self.profile.id, self.status.connection)
+        {
+            self.status.pending = status.pending;
+            self.status.in_flight = status.in_flight;
+            self.status.blocked = status.blocked;
+            let _ = self.status_tx.send(self.status.clone());
         }
     }
 }
