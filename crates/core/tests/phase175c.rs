@@ -283,6 +283,25 @@ async fn wait_delivery_status(
     .unwrap();
 }
 
+async fn wait_connection(runtime: &RuntimeSupervisor, profile_id: &str, expected: &str) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let current = runtime
+                .status()
+                .servers
+                .iter()
+                .find(|server| server.profile_id == profile_id)
+                .map(|server| server.connection.to_string());
+            if current.as_deref() == Some(expected) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
 #[tokio::test]
 async fn phase_175c_runtime_uses_independent_dual_servers_and_recovery() {
     let a = TestServer::start().await;
@@ -327,6 +346,8 @@ async fn phase_175c_runtime_uses_independent_dual_servers_and_recovery() {
     );
     a.disconnect.notify_one();
     a.ack.store(true, Ordering::SeqCst);
+    wait_connection(&runtime, "a", "Reconnecting").await;
+    wait_connection(&runtime, "b", "Ready").await;
     a.wait_for(|s| s.ready.load(Ordering::SeqCst) >= 2).await;
     a.wait_for(|s| s.sequences().iter().filter(|&&n| n == 2).count() >= 2)
         .await;
