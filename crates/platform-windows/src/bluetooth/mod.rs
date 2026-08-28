@@ -4,7 +4,7 @@ mod collector;
 mod error;
 mod model;
 
-pub use ble::{parse_advertisement, BleAdvertisement, BleScanner, NativeBleScanner};
+pub use ble::{BleAdvertisement, BleScanner, NativeBleScanner, parse_advertisement};
 pub use classic::{ClassicBluetoothScanner, NativeClassicBluetoothScanner};
 pub use collector::{BluetoothCollector, BluetoothProvider, BluetoothScanResult};
 pub use error::BluetoothError;
