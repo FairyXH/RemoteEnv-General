@@ -126,6 +126,7 @@ fn config(identity: DeviceIdentity, fixture: &Fixture) -> ClientConfig {
     config.identity = identity;
     config.wifi_enabled = true;
     config.scan_interval_seconds = 1;
+    config.upload_interval_seconds = 1;
     config.heartbeat_interval_seconds = 1;
     let profile_device_id = config.identity.device_id.clone();
     config.server_profiles = vec![ServerProfile {

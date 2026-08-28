@@ -52,10 +52,16 @@ pub struct ClientConfig {
     #[serde(default)]
     pub bluetooth_enabled: bool,
     pub scan_interval_seconds: u64,
+    #[serde(default = "default_upload_interval_seconds")]
+    pub upload_interval_seconds: u64,
     pub heartbeat_interval_seconds: u64,
     pub max_uploads_per_minute: u64,
     pub max_queue_size: u64,
     pub log_level: LoggingLevel,
+}
+
+fn default_upload_interval_seconds() -> u64 {
+    30
 }
 
 impl Default for ClientConfig {
@@ -77,6 +83,7 @@ impl Default for ClientConfig {
             wifi_enabled: false,
             bluetooth_enabled: false,
             scan_interval_seconds: 30,
+            upload_interval_seconds: 30,
             heartbeat_interval_seconds: 15,
             max_uploads_per_minute: 60,
             max_queue_size: 1000,
@@ -96,7 +103,10 @@ impl ClientConfig {
         if self.identity.device_id.trim().is_empty() {
             return Err("device_id is required".into());
         }
-        if self.scan_interval_seconds == 0 || self.heartbeat_interval_seconds == 0 {
+        if self.scan_interval_seconds == 0
+            || self.upload_interval_seconds == 0
+            || self.heartbeat_interval_seconds == 0
+        {
             return Err("intervals must be positive".into());
         }
         if self.max_queue_size == 0

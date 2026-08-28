@@ -11,6 +11,7 @@ use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
+use std::collections::HashMap;
 use std::thread::JoinHandle;
 use std::time::Duration;
 use tokio::sync::{mpsc, watch};
@@ -378,27 +379,37 @@ impl RuntimeSupervisor {
                     supervisor.apply_config(&config).await;
                     let mut current_config = config;
                     let mut status_tick = tokio::time::interval(Duration::from_millis(20));
-                    let worker = scan.map(|scan| PeriodicCollectorHandle::start(scan, current_config.wifi_enabled, Duration::from_secs(current_config.scan_interval_seconds), events_for_worker.clone(), wifi_status_tx));
-                    let bluetooth_worker = bluetooth_scan.map(|scan| BluetoothWorkerHandle::start(scan, current_config.bluetooth_enabled, Duration::from_secs(current_config.scan_interval_seconds), events_for_bluetooth_worker.clone(), bluetooth_status_tx));
+                    let mut upload_tick = tokio::time::interval(Duration::from_secs(current_config.upload_interval_seconds));
+                    upload_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                    let mut latest_events: HashMap<String, CollectorEvent> = HashMap::new();
+                    let worker = scan.map(|scan| PeriodicCollectorHandle::start(scan, current_config.wifi_enabled, Duration::from_secs(1), events_for_worker.clone(), wifi_status_tx));
+                    let bluetooth_worker = bluetooth_scan.map(|scan| BluetoothWorkerHandle::start(scan, current_config.bluetooth_enabled, Duration::from_secs(1), events_for_bluetooth_worker.clone(), bluetooth_status_tx));
                     let mut wifi_runtime = WiFiRuntimeStatus::default();
                     let mut bluetooth_runtime = BluetoothRuntimeStatus::default();
                     loop {
                         tokio::select! {
                             _ = &mut stop_rx => break,
                             Some(event) = event_rx.recv() => {
-                                let device_id = current_config
-                                    .selected_servers()
-                                    .first()
-                                    .map(|profile| profile.device_id.clone())
-                                    .unwrap_or_else(|| current_config.identity.device_id.clone());
-                                let Ok(sequence) = store.next_sequence(&device_id, &event.data_type) else { continue; };
-                                let envelope = EnvironmentEnvelope::new(device_id, event.data_type, sequence, event.data);
-                                let _ = dispatcher.persist_event(&current_config, &envelope);
+                                latest_events.insert(event.data_type.clone(), event);
+                            }
+                            _ = upload_tick.tick() => {
+                                for (_, event) in latest_events.drain() {
+                                    let device_id = current_config
+                                        .selected_servers()
+                                        .first()
+                                        .map(|profile| profile.device_id.clone())
+                                        .unwrap_or_else(|| current_config.identity.device_id.clone());
+                                    let Ok(sequence) = store.next_sequence(&device_id, &event.data_type) else { continue; };
+                                    let envelope = EnvironmentEnvelope::new(device_id, event.data_type, sequence, event.data);
+                                    let _ = dispatcher.persist_event(&current_config, &envelope);
+                                }
                             }
                             Some(updated_config) = config_rx.recv() => {
                                 supervisor.apply_config(&updated_config).await;
-                                if let Some(worker) = worker.as_ref() { worker.configure(updated_config.wifi_enabled, Duration::from_secs(updated_config.scan_interval_seconds)); }
-                                if let Some(worker) = bluetooth_worker.as_ref() { worker.configure(updated_config.bluetooth_enabled, Duration::from_secs(updated_config.scan_interval_seconds)); }
+                                if let Some(worker) = worker.as_ref() { worker.configure(updated_config.wifi_enabled, Duration::from_secs(1)); }
+                                if let Some(worker) = bluetooth_worker.as_ref() { worker.configure(updated_config.bluetooth_enabled, Duration::from_secs(1)); }
+                                upload_tick = tokio::time::interval(Duration::from_secs(updated_config.upload_interval_seconds));
+                                upload_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                                 current_config = updated_config;
                             }
                             Some(updated_wifi) = wifi_status_rx.recv() => {
@@ -417,7 +428,7 @@ impl RuntimeSupervisor {
                                     .or_else(|| servers.iter().find(|s| s.connection == ConnectionState::Authenticating).map(|s| s.connection))
                                     .or_else(|| servers.iter().find(|s| s.connection == ConnectionState::Connecting).map(|s| s.connection))
                                     .or_else(|| servers.iter().find(|s| s.connection == ConnectionState::Reconnecting).map(|s| s.connection))
-                                    .unwrap_or(ConnectionState::Stopped);
+                                    .unwrap_or_else(|| if servers.is_empty() { ConnectionState::Stopped } else { ConnectionState::Connecting });
                                 snapshot.servers = servers;
                                 snapshot.pending = snapshot.servers.iter().map(|s| s.pending).sum();
                                 snapshot.in_flight = snapshot.servers.iter().map(|s| s.in_flight).sum();

@@ -49,6 +49,7 @@ fn identity_is_created_once_and_config_is_round_trippable() {
         wifi_enabled: true,
         bluetooth_enabled: false,
         scan_interval_seconds: 30,
+        upload_interval_seconds: 30,
         heartbeat_interval_seconds: 15,
         max_uploads_per_minute: 60,
         max_queue_size: 100,

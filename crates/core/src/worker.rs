@@ -249,6 +249,11 @@ impl ServerWorker {
                     let value = serde_json::from_str::<Value>(message.map_err(|_| WorkerError::Transport)?.to_text().map_err(|_| WorkerError::Protocol)?).map_err(|_| WorkerError::Protocol)?;
                     match classify_server_message(value["type"].as_str().unwrap_or_default(), value["code"].as_str()) {
                         ServerEvent::Pong => { self.heartbeat_monitor.mark_pong(); self.mark_heartbeat(); }
+                        ServerEvent::Invalid if value["type"] == "ping" => {
+                            socket.send(Message::Text(r#"{"type":"pong"}"#.into())).await.map_err(|_| WorkerError::Transport)?;
+                            self.heartbeat_monitor.mark_pong();
+                            self.mark_heartbeat();
+                        }
                         ServerEvent::Ack => {
                             let Some((id, envelope)) = in_flight.take() else { continue; };
                             let ack: Ack = serde_json::from_value(value).map_err(|_| WorkerError::Protocol)?;

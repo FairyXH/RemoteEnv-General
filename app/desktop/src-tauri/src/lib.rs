@@ -55,6 +55,7 @@ struct DesktopConfigView {
     wifi_enabled: bool,
     bluetooth_enabled: bool,
     scan_interval_seconds: u64,
+    upload_interval_seconds: u64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -299,6 +300,7 @@ fn config_view(config: &ClientConfig) -> DesktopConfigView {
         wifi_enabled: config.wifi_enabled,
         bluetooth_enabled: config.bluetooth_enabled,
         scan_interval_seconds: config.scan_interval_seconds,
+        upload_interval_seconds: config.upload_interval_seconds,
     }
 }
 
@@ -418,10 +420,11 @@ fn set_runtime_options(
     wifi_enabled: bool,
     bluetooth_enabled: bool,
     scan_interval_seconds: u64,
+    upload_interval_seconds: u64,
     state: State<'_, AppState>,
 ) -> Result<DesktopConfigView, String> {
-    if scan_interval_seconds == 0 || scan_interval_seconds > 3600 {
-        return Err("扫描间隔必须在 1 到 3600 秒之间。".into());
+    if scan_interval_seconds == 0 || scan_interval_seconds > 3600 || upload_interval_seconds == 0 || upload_interval_seconds > 3600 {
+        return Err("扫描间隔和上传间隔必须在 1 到 3600 秒之间。".into());
     }
     let (store, mut config) = load_config(&state.state_path)?;
     config.server_mode = server_mode;
@@ -429,6 +432,7 @@ fn set_runtime_options(
     config.wifi_enabled = wifi_enabled;
     config.bluetooth_enabled = bluetooth_enabled;
     config.scan_interval_seconds = scan_interval_seconds;
+    config.upload_interval_seconds = upload_interval_seconds;
     if config.server_mode == ServerMode::Single && !config.server_profiles.is_empty() {
         let active = config.active_server_id.as_deref();
         if active.is_none()
