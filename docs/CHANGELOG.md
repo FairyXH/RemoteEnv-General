@@ -8,7 +8,9 @@
 - Enabled Tauri NSIS bundling metadata and application icon configuration.
 - Replaced the starter UI with a Chinese production surface for Runtime, server profile CRUD, token masking, collector options, readable errors, and queue status.
 - Added Tauri runtime status event push, close-to-tray behavior, tray lifecycle actions, graceful Runtime shutdown, and WebSocket/auth/heartbeat server testing.
-- Added Windows-user DPAPI protection for persisted server Tokens; legacy plaintext configs are migrated on save.
+- Added explicit per-server Device ID input and used it for persistent authentication and upload identity.
+- Added persistent server connection action, immediate Wi-Fi/Bluetooth scan actions, and JSON detail dialogs for the latest scan.
+- Server test now completes after authentication and device list instead of waiting indefinitely for a separate heartbeat response.
 - Set a restrictive local-resource CSP for the Tauri WebView.
 
 

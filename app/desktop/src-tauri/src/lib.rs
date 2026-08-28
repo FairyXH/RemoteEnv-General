@@ -1,7 +1,7 @@
 use futures_util::{SinkExt, StreamExt};
 use remote_env_core::collector::CollectorEvent;
 use remote_env_core::config::{ClientConfig, ServerMode, ServerProfile};
-use remote_env_core::protocol::{AuthFrame, HeartbeatFrame};
+use remote_env_core::protocol::AuthFrame;
 use remote_env_core::runtime::{RuntimeStatus, RuntimeSupervisor};
 use remote_env_core::state::StateStore;
 use remote_env_platform_windows::bluetooth::{
@@ -379,6 +379,94 @@ fn set_runtime_options(
 }
 
 #[tauri::command]
+fn connect_server_profile(
+    id: String,
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<RuntimeStatus, String> {
+    let (store, mut config) = load_config(&state.state_path)?;
+    let profile = config
+        .server_profiles
+        .iter()
+        .find(|profile| profile.id == id)
+        .ok_or_else(|| "未找到服务器配置。".to_string())?;
+    if profile.device_id.trim().is_empty() || profile.token.trim().is_empty() {
+        return Err("请先完善服务器的设备 ID 和令牌。".into());
+    }
+    config.server_mode = ServerMode::Single;
+    config.active_server_id = Some(id);
+    config.validate().map_err(user_error)?;
+    save_config(&store, &config)?;
+    let mut guard = state
+        .runtime
+        .lock()
+        .map_err(|_| "应用状态不可用。".to_string())?;
+    if let Some(runtime) = guard.as_ref() {
+        runtime.update_config(config).map_err(user_error)?;
+    } else {
+        *guard = Some(
+            RuntimeSupervisor::start_with_collectors(
+                config,
+                store,
+                Some(std::sync::Arc::new(|| {
+                    NativeWlanProvider::new()
+                        .scan()
+                        .and_then(|snapshot| {
+                            Ok(CollectorEvent {
+                                data_type: "wifi".into(),
+                                timestamp_ms: 0,
+                                data: serde_json::to_value(snapshot).map_err(|error| {
+                                    remote_env_platform_windows::wifi::WiFiError::InvalidData(
+                                        error.to_string(),
+                                    )
+                                })?,
+                            })
+                        })
+                        .map_err(|error| error.to_string())
+                })),
+                Some(std::sync::Arc::new(|| {
+                    BluetoothCollector::new(
+                        NativeBleScanner::new(),
+                        NativeClassicBluetoothScanner::new(),
+                    )
+                    .scan_once()
+                    .map_err(|error| error.to_string())
+                })),
+            )
+            .map_err(user_error)?,
+        );
+    }
+    let status = guard
+        .as_ref()
+        .map(RuntimeSupervisor::status)
+        .unwrap_or_default();
+    let _ = app.emit(STATUS_EVENT, &status);
+    Ok(status)
+}
+
+#[tauri::command]
+fn scan_wifi_now() -> Result<CollectorEvent, String> {
+    let snapshot = NativeWlanProvider::new()
+        .scan()
+        .map_err(|error| error.to_string())?;
+    Ok(CollectorEvent {
+        data_type: "wifi".into(),
+        timestamp_ms: 0,
+        data: serde_json::to_value(snapshot).map_err(|error| error.to_string())?,
+    })
+}
+
+#[tauri::command]
+fn scan_bluetooth_now() -> Result<CollectorEvent, String> {
+    BluetoothCollector::new(
+        NativeBleScanner::new(),
+        NativeClassicBluetoothScanner::new(),
+    )
+    .scan_once()
+    .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 async fn test_server_profile(
     id: String,
     state: State<'_, AppState>,
@@ -433,36 +521,10 @@ async fn test_server_profile(
                 _ => {}
             }
         }
-        let heartbeat = HeartbeatFrame {
-            r#type: "heartbeat".into(),
-            timestamp: 0,
-        };
-        socket
-            .send(Message::Text(
-                serde_json::to_string(&heartbeat)
-                    .map_err(|_| "心跳请求无效。".to_string())?
-                    .into(),
-            ))
-            .await
-            .map_err(|_| "无法发送心跳请求。".to_string())?;
-        while let Some(frame) = socket.next().await {
-            let Message::Text(text) = frame.map_err(|_| "读取心跳响应失败。".to_string())?
-            else {
-                continue;
-            };
-            if serde_json::from_str::<serde_json::Value>(&text)
-                .ok()
-                .and_then(|value| value["type"].as_str().map(str::to_owned))
-                .as_deref()
-                == Some("pong")
-            {
-                return Ok(ConnectionTestResult {
-                    success: true,
-                    message: "连接成功，认证成功，服务器可用。".into(),
-                });
-            }
-        }
-        Err("服务器未返回心跳响应。".into())
+        Ok(ConnectionTestResult {
+            success: true,
+            message: "连接成功，认证成功，服务器可用。".into(),
+        })
     };
     tokio::time::timeout(Duration::from_secs(15), test)
         .await
@@ -622,6 +684,9 @@ pub fn run() {
             save_server_profile,
             delete_server_profile,
             set_runtime_options,
+            connect_server_profile,
+            scan_wifi_now,
+            scan_bluetooth_now,
             test_server_profile,
             start_runtime,
             stop_runtime

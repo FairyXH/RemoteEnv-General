@@ -10,10 +10,15 @@ The UI reads `get_runtime_status` and renders the real `servers` list, including
 
 ## Phase 2-C desktop UI
 
-主界面现在提供运行时启动/停止、单/多服务器模式、服务器新增/编辑/删除/启用、连接测试、令牌显示/隐藏、Wi-Fi 与统一 Bluetooth 开关、扫描间隔和队列统计。令牌不在状态模型中返回；编辑已有服务器时令牌留空表示保留原值。UI 和用户可见状态均为简体中文。
+主界面现在提供运行时启动/停止、单/多服务器模式、服务器新增/编辑/删除/启用、持久连接、连接测试、令牌显示/隐藏、Wi-Fi 与统一 Bluetooth 开关、即时扫描、扫描详情、扫描间隔和队列统计。令牌不在状态模型中返回；编辑已有服务器时令牌留空表示保留原值。UI 和用户可见状态均为简体中文。
 
 状态首次加载使用 `get_runtime_status`，之后由 Tauri 的 `runtime_status_changed` 事件更新；快照仍可用于恢复和调试。
 
-## Tray
+## 服务器测试与持久连接
+
+“测试”只验证 WebSocket、认证和 `device_list`，认证成功后立即返回，不等待服务端额外心跳，因此不会因为测试连接被服务端主动关闭而误报超时。“连接”会把指定 Profile 设为活动服务器并启动/更新 Runtime，由正式 ServerWorker 保持 WebSocket、心跳和重连。
+
+Wi-Fi 和蓝牙卡片的“扫描”按钮执行一次原生 Windows 扫描；“详情”显示最近一次扫描的完整 JSON，蓝牙详情保留 BLE/Classic 来源和 RAW 广告字段。
+
 
 Tauri desktop owns the tray boundary。关闭主窗口会隐藏到托盘，Runtime 不会因此停止。托盘提供打开、启动运行时、停止运行时和退出；退出路径先停止 Runtime、采集器和 ServerWorker，再结束进程。
