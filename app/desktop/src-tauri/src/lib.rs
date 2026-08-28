@@ -14,7 +14,12 @@ use std::sync::{
     Mutex,
     atomic::{AtomicBool, Ordering},
 };
-use std::time::Duration;
+use std::{
+    fs::{self, OpenOptions},
+    io::Write,
+    sync::OnceLock,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 use tauri::{
     Emitter, Manager, State,
     menu::{Menu, MenuItem},
@@ -23,10 +28,12 @@ use tauri::{
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 const STATUS_EVENT: &str = "runtime_status_changed";
+static LOG_PATH: OnceLock<PathBuf> = OnceLock::new();
 
 pub struct AppState {
     runtime: Mutex<Option<RuntimeSupervisor>>,
     state_path: PathBuf,
+    log_path: PathBuf,
     exiting: AtomicBool,
 }
 
@@ -77,8 +84,69 @@ fn user_error(error: impl std::fmt::Display) -> String {
 
 fn state_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let dir = app.path().app_data_dir().map_err(user_error)?;
-    std::fs::create_dir_all(&dir).map_err(user_error)?;
+    fs::create_dir_all(&dir).map_err(user_error)?;
     Ok(dir.join("state.sqlite3"))
+}
+
+fn log_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let dir = app.path().app_data_dir().map_err(user_error)?.join("logs");
+    fs::create_dir_all(&dir).map_err(user_error)?;
+    Ok(dir.join("collector.log"))
+}
+
+fn init_logging(path: PathBuf) {
+    let _ = LOG_PATH.set(path);
+}
+
+fn write_log(level: &str, message: &str) {
+    let Some(path) = LOG_PATH.get() else {
+        return;
+    };
+    let safe = message
+        .replace("Authorization", "[REDACTED]")
+        .replace("Cookie", "[REDACTED]");
+    if let Ok(metadata) = fs::metadata(path) {
+        if metadata.len() > 5 * 1024 * 1024 {
+            let rotated = path.with_extension("log.1");
+            let _ = fs::rename(path, rotated);
+        }
+    }
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_secs())
+            .unwrap_or_default();
+        let _ = writeln!(file, "{} [{}] {}", now, level, safe);
+    }
+}
+
+fn info(message: impl AsRef<str>) {
+    write_log("INFO", message.as_ref());
+}
+fn warn(message: impl AsRef<str>) {
+    write_log("WARN", message.as_ref());
+}
+fn error(message: impl AsRef<str>) {
+    write_log("ERROR", message.as_ref());
+}
+
+#[tauri::command]
+fn get_log_tail(state: State<'_, AppState>) -> Result<String, String> {
+    let content = fs::read_to_string(&state.log_path).map_err(user_error)?;
+    Ok(content
+        .lines()
+        .rev()
+        .take(200)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<Vec<_>>()
+        .join("\n"))
+}
+
+#[tauri::command]
+fn get_log_path(state: State<'_, AppState>) -> String {
+    state.log_path.display().to_string()
 }
 
 fn open_store(path: &PathBuf) -> Result<StateStore, String> {
@@ -384,6 +452,7 @@ fn connect_server_profile(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<RuntimeStatus, String> {
+    info(format!("收到服务器连接请求 profile_id={id}"));
     let (store, mut config) = load_config(&state.state_path)?;
     let profile = config
         .server_profiles
@@ -391,6 +460,7 @@ fn connect_server_profile(
         .find(|profile| profile.id == id)
         .ok_or_else(|| "未找到服务器配置。".to_string())?;
     if profile.device_id.trim().is_empty() || profile.token.trim().is_empty() {
+        warn(format!("服务器配置不完整 profile_id={id}"));
         return Err("请先完善服务器的设备 ID 和令牌。".into());
     }
     config.server_mode = ServerMode::Single;
@@ -441,20 +511,31 @@ fn connect_server_profile(
         .map(RuntimeSupervisor::status)
         .unwrap_or_default();
     let _ = app.emit(STATUS_EVENT, &status);
+    info("服务器连接命令已提交");
     Ok(status)
 }
 
 #[tauri::command]
 async fn scan_wifi_now() -> Result<CollectorEvent, String> {
     tauri::async_runtime::spawn_blocking(|| {
-        let snapshot = NativeWlanProvider::new()
-            .scan()
-            .map_err(|error| error.to_string())?;
-        Ok(CollectorEvent {
-            data_type: "wifi".into(),
-            timestamp_ms: 0,
-            data: serde_json::to_value(snapshot).map_err(|error| error.to_string())?,
-        })
+        let result = NativeWlanProvider::new().scan();
+        match result {
+            Ok(snapshot) => {
+                info(format!(
+                    "Wi-Fi 单次扫描完成 networks={}",
+                    snapshot.networks.len()
+                ));
+                Ok(CollectorEvent {
+                    data_type: "wifi".into(),
+                    timestamp_ms: 0,
+                    data: serde_json::to_value(snapshot).map_err(|error| error.to_string())?,
+                })
+            }
+            Err(scan_error) => {
+                error(format!("Wi-Fi 单次扫描失败: {scan_error}"));
+                Err(scan_error.to_string())
+            }
+        }
     })
     .await
     .map_err(|_| "Wi-Fi 扫描任务异常终止。".to_string())?
@@ -468,7 +549,10 @@ async fn scan_bluetooth_now() -> Result<CollectorEvent, String> {
             NativeClassicBluetoothScanner::new(),
         )
         .scan_once()
-        .map_err(|error| error.to_string())
+        .map_err(|scan_error| {
+            error(format!("蓝牙单次扫描失败: {scan_error}"));
+            scan_error.to_string()
+        })
     })
     .await
     .map_err(|_| "蓝牙扫描任务异常终止。".to_string())?
@@ -479,6 +563,7 @@ async fn test_server_profile(
     id: String,
     state: State<'_, AppState>,
 ) -> Result<ConnectionTestResult, String> {
+    info(format!("收到服务器测试请求 profile_id={id}"));
     let (_, config) = load_config(&state.state_path)?;
     let profile = config
         .server_profiles
@@ -544,6 +629,7 @@ fn start_runtime(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<RuntimeStatus, String> {
+    info("收到启动运行时请求");
     let (store, config) = load_config(&state.state_path)?;
     if config.selected_servers().is_empty() {
         return Err("请先新增并启用至少一个服务器配置。".into());
@@ -649,9 +735,12 @@ pub fn run() {
             let path = state_path(&app.handle()).map_err(|error| std::io::Error::other(error))?;
             app.manage(AppState {
                 runtime: Mutex::new(None),
-                state_path: path,
+                state_path: path.clone(),
+                log_path: log_path(&app.handle()).map_err(|error| std::io::Error::other(error))?,
                 exiting: AtomicBool::new(false),
             });
+            init_logging(log_path(&app.handle()).map_err(|error| std::io::Error::other(error))?);
+            info("应用启动");
             let open = MenuItem::with_id(app, "open", "打开主窗口", true, None::<&str>)?;
             let start = MenuItem::with_id(app, "start", "启动运行时", true, None::<&str>)?;
             let stop = MenuItem::with_id(app, "stop", "停止运行时", true, None::<&str>)?;
@@ -687,6 +776,8 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            get_log_tail,
+            get_log_path,
             get_runtime_status,
             get_desktop_config,
             save_server_profile,
