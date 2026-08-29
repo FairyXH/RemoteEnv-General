@@ -52,16 +52,18 @@ fn persist_latest_events(
         latest_events.remove("bluetooth");
         let device_id = config.identity.device_id.clone();
         let captured_at_ms = now_ms();
-        let sequence = store.next_timestamp_sequence(&device_id, "environment")?;
+        let sequence = store.next_timestamp_sequence(&device_id, "bluetooth")?;
         let envelope = EnvironmentEnvelope {
             timestamp: captured_at_ms,
             sequence,
             ..EnvironmentEnvelope::new(
                 device_id,
-                "environment",
+                "bluetooth",
                 sequence,
                 serde_json::json!({
                     "captured_at_ms": captured_at_ms,
+                    "devices": bluetooth.data["devices"],
+                    "technology": "bluetooth",
                     "wifi": wifi.data,
                     "bluetooth": bluetooth.data,
                 }),
@@ -235,7 +237,7 @@ impl BluetoothWorkerHandle {
                             total += 1; let started = std::time::Instant::now();
                             let _ = statuses.send(BluetoothRuntimeStatus { enabled, state: WiFiRuntimeState::Scanning, total_scans: total, successful_scans: successful, failed_scans: failed, ..Default::default() }).await;
                             match timeout(Duration::from_secs(120), tokio::task::spawn_blocking({ let scan = Arc::clone(&scan); move || scan() })).await {
-                                Ok(Ok(Ok(event))) => { successful += 1; let items = event.data["observations"].as_array(); let count = items.map_or(0, Vec::len); let ble = items.map_or(0, |v| v.iter().filter(|x| matches!(x["transport"].as_str(), Some("ble") | Some("dual"))).count()); let classic = items.map_or(0, |v| v.iter().filter(|x| matches!(x["transport"].as_str(), Some("classic") | Some("dual"))).count()); let now = now_ms(); let _ = statuses.send(BluetoothRuntimeStatus { enabled, state: WiFiRuntimeState::Ready, ble_device_count: ble, classic_device_count: classic, device_count: Some(count), last_scan_ms: Some(now), last_successful_scan_ms: Some(now), last_error: None, total_scans: total, successful_scans: successful, failed_scans: failed, duration_ms: Some(started.elapsed().as_millis() as u64) }).await; let _ = events.send(event).await; }
+                                Ok(Ok(Ok(event))) => { successful += 1; let items = event.data["devices"].as_array(); let count = items.map_or(0, Vec::len); let ble = items.map_or(0, |v| v.iter().filter(|x| matches!(x["mode"].as_str(), Some("ble") | Some("dual"))).count()); let classic = items.map_or(0, |v| v.iter().filter(|x| matches!(x["mode"].as_str(), Some("classic") | Some("dual"))).count()); let now = now_ms(); let _ = statuses.send(BluetoothRuntimeStatus { enabled, state: WiFiRuntimeState::Ready, ble_device_count: ble, classic_device_count: classic, device_count: Some(count), last_scan_ms: Some(now), last_successful_scan_ms: Some(now), last_error: None, total_scans: total, successful_scans: successful, failed_scans: failed, duration_ms: Some(started.elapsed().as_millis() as u64) }).await; let _ = events.send(event).await; }
                                 Ok(Ok(Err(error))) => { failed += 1; let _ = statuses.send(BluetoothRuntimeStatus { enabled, state: WiFiRuntimeState::Error, last_error: Some(error), total_scans: total, successful_scans: successful, failed_scans: failed, ..Default::default() }).await; }
                                 Ok(Err(error)) => { failed += 1; let _ = statuses.send(BluetoothRuntimeStatus { enabled, state: WiFiRuntimeState::Error, last_error: Some(error.to_string()), total_scans: total, successful_scans: successful, failed_scans: failed, ..Default::default() }).await; }
                                 Err(error) => { failed += 1; let _ = statuses.send(BluetoothRuntimeStatus { enabled, state: WiFiRuntimeState::Error, last_error: Some(error.to_string()), total_scans: total, successful_scans: successful, failed_scans: failed, ..Default::default() }).await; }

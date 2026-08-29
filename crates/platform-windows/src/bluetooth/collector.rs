@@ -69,11 +69,46 @@ impl<B: BleScanner + 'static, C: ClassicBluetoothScanner + 'static> BluetoothCol
             classic_available,
             scan_duration_ms: started.elapsed().as_millis() as u64,
         };
+        let devices: Vec<serde_json::Value> = snapshot
+            .observations
+            .iter()
+            .map(|observation| {
+                let mode = match observation.transport {
+                    remote_env_core::bluetooth::BluetoothTransport::Ble => "ble",
+                    remote_env_core::bluetooth::BluetoothTransport::Classic => "classic",
+                    remote_env_core::bluetooth::BluetoothTransport::Dual => "dual",
+                };
+                serde_json::json!({
+                    "address": observation.address,
+                    "name": observation.name,
+                    "rssi": observation.rssi,
+                    "mode": mode,
+                    "classicRssi": observation.rssi,
+                    "classOfDevice": observation.class_of_device,
+                    "txPower": observation.tx_power,
+                    "serviceUuids": observation.service_uuids,
+                    "manufacturerData": observation.manufacturer_data.iter().map(|item| (item.company_id.to_string(), hex_encode(&item.data))).collect::<std::collections::HashMap<_, _>>(),
+                    "serviceData": observation.service_data.iter().map(|item| (item.uuid.clone(), hex_encode(&item.data))).collect::<std::collections::HashMap<_, _>>(),
+                    "rawAdvertisementSections": observation.raw_advertisement_sections,
+                    "connectable": observation.connectable,
+                    "appearance": observation.appearance,
+                    "timestamp": observation.timestamp_ms,
+                })
+            })
+            .collect();
+        let data = serde_json::json!({
+            "scan_started_at": now_ms().saturating_sub(snapshot.scan_duration_ms as i64),
+            "scan_finished_at": now_ms(),
+            "technology": "bluetooth",
+            "ble_available": snapshot.ble_available,
+            "classic_available": snapshot.classic_available,
+            "scan_duration_ms": snapshot.scan_duration_ms,
+            "devices": devices,
+        });
         Ok(CollectorEvent {
             data_type: "bluetooth".into(),
             timestamp_ms: now_ms(),
-            data: serde_json::to_value(snapshot)
-                .map_err(|e| BluetoothError::InvalidData(e.to_string()))?,
+            data,
         })
     }
 }
@@ -102,6 +137,10 @@ fn now_ms() -> i64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as i64
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02X}")).collect()
 }
 
 #[cfg(test)]
@@ -148,7 +187,7 @@ mod tests {
         );
         let event = collector.scan_once().unwrap();
         assert_eq!(event.data_type, "bluetooth");
-        assert_eq!(event.data["observations"].as_array().unwrap().len(), 1);
+        assert_eq!(event.data["devices"].as_array().unwrap().len(), 1);
     }
     #[test]
     fn partial_failure_keeps_other_transport() {
@@ -157,7 +196,7 @@ mod tests {
             MockClassic(Ok(vec![obs(BluetoothTransport::Classic, 1)])),
         );
         let event = collector.scan_once().unwrap();
-        assert_eq!(event.data["observations"][0]["transport"], "classic");
+        assert_eq!(event.data["devices"][0]["mode"], "classic");
     }
     #[test]
     fn classic_failure_keeps_ble_transport() {
@@ -166,7 +205,7 @@ mod tests {
             MockClassic(Err(BluetoothError::Unavailable("classic".into()))),
         );
         let event = collector.scan_once().unwrap();
-        assert_eq!(event.data["observations"][0]["transport"], "ble");
+        assert_eq!(event.data["devices"][0]["mode"], "ble");
     }
     #[test]
     fn both_sources_failed_returns_error() {
@@ -184,6 +223,6 @@ mod tests {
         )
         .with_cross_transport_merge(true);
         let event = collector.scan_once().unwrap();
-        assert_eq!(event.data["observations"][0]["transport"], "dual");
+        assert_eq!(event.data["devices"][0]["mode"], "dual");
     }
 }

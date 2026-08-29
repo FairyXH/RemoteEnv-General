@@ -31,6 +31,7 @@ Time is Unix milliseconds. `data_type` must match `^[a-z][a-z0-9_.-]{0,63}$`.
 - Target selection is immutable after an event is persisted: changing mode or disabling a profile affects future events only. Removing a server should cancel its pending deliveries rather than leave them indefinitely pending.
 - Runtime event persistence now creates one `upload_deliveries` row per immutable target set, reusing the same global sequence for every target.
 - Bluetooth uses the same envelope with `data_type: "bluetooth"`; BLE and Classic observations are payload fields, not separate protocol types. The durable sequence namespace is `(device_id, "bluetooth")`.
+- When both Wi-Fi and Bluetooth collection are enabled, the production runtime sends exactly one combined envelope per compatible snapshot pair using `data_type: "bluetooth"`: `data: {"captured_at_ms": ..., "technology":"bluetooth", "devices": [...], "wifi": <WiFiSnapshot>, "bluetooth": <BluetoothSnapshot>}`. BLE and Classic observations are unified in `devices` and distinguished per device by `mode` (`ble`, `classic`, or `dual`). Both source snapshots must be from events no more than 15 seconds apart; otherwise the older side is discarded and the runtime waits for a fresh pair. One sequence, one delivery, and one ACK represent the combined packet.
 - Event completion is true only when all target deliveries are `completed` or `cancelled`; `blocked` remains incomplete and visible.
 
 ## Documentation difference

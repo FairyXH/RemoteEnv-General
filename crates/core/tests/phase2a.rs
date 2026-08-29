@@ -228,7 +228,7 @@ async fn wifi_and_bluetooth_snapshots_upload_as_one_environment_envelope() {
             data_type: "bluetooth".into(),
             timestamp_ms: 2,
             data: serde_json::json!({
-                "observations": [{"address": "AA:BB:CC:DD:EE:01", "transport": "ble"}],
+                "devices": [{"address": "AA:BB:CC:DD:EE:01", "mode": "ble"}],
                 "ble_available": true,
                 "classic_available": true,
                 "scan_duration_ms": 10
@@ -248,9 +248,10 @@ async fn wifi_and_bluetooth_snapshots_upload_as_one_environment_envelope() {
         .await;
     let received = fixture.received.lock().unwrap().clone();
     assert_eq!(received.len(), 2);
-    assert!(received.iter().all(|item| item["data_type"] == "environment"));
+    assert!(received.iter().all(|item| item["data_type"] == "bluetooth"));
+    assert!(received.iter().all(|item| item["data"]["devices"].is_array()));
     assert!(received.iter().all(|item| item["data"]["wifi"]["networks"].is_array()));
-    assert!(received.iter().all(|item| item["data"]["bluetooth"]["observations"].is_array()));
+    assert!(received.iter().all(|item| item["data"]["bluetooth"]["devices"].is_array()));
     assert!(received[1]["sequence"].as_u64().unwrap() > received[0]["sequence"].as_u64().unwrap());
     runtime.stop();
 }

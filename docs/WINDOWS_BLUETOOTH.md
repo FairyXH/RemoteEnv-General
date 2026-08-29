@@ -2,7 +2,7 @@
 
 ## Status
 
-Phase 2-B is **Complete**. The Windows platform crate contains one unified `BluetoothCollector` with independent BLE and Classic scanner boundaries. A scan produces one `CollectorEvent` with `data_type = "bluetooth"`; scanners do not allocate sequences, touch SQLite, or upload data. `RuntimeSupervisor::start_with_collectors` owns one Bluetooth periodic worker and routes its events through the existing sequence, target delivery, ServerWorker, and ACK path.
+Phase 2-B is **Complete**. The Windows platform crate contains one unified `BluetoothCollector` with independent BLE and Classic scanner boundaries. A scan produces one Bluetooth source snapshot; scanners do not allocate sequences, touch SQLite, or upload data. `RuntimeSupervisor::start_with_collectors` owns one Bluetooth periodic worker and routes its snapshot through the combined Wi-Fi/Bluetooth environment envelope, target delivery, ServerWorker, and ACK path.
 
 ## Model and aggregation
 
@@ -16,7 +16,7 @@ BLE AD parsing covers flags/connectability, complete and shortened local name, 1
 
 Classic discovery uses `BluetoothFindFirstRadio`, `BluetoothFindFirstDevice`, `BluetoothFindNextDevice`, and their close functions from `bluetoothapis.dll` through `windows-sys`. The native structure reliably supplies address, name, class of device, and discovery flags; RSSI and advertisement/service payloads are left unavailable. The synchronous inquiry must be isolated from the Runtime control thread when integrated.
 
-The WinRT `Windows.Devices.Bluetooth.Advertisement.BluetoothLEAdvertisementWatcher` is implemented through the `windows` crate. It starts active scanning, extracts address, RSSI, local name, service UUIDs, manufacturer data, connectability, and Tx power in an event handler, sends observations through a bounded channel, then stops and unregisters the handler at the end of the scan window.
+The BLE WinRT `Windows.Devices.Bluetooth.Advertisement.BluetoothLEAdvertisementWatcher` is implemented through the `windows` crate. It initializes WinRT MTA, uses active scanning with extended advertisements enabled, extracts address, RSSI, local name, service UUIDs, manufacturer data, connectability, and Tx power in an event handler, sends observations through a reliable channel, then stops and unregisters the handler at the end of the scan window. BLE and Classic scans run concurrently, and the collector retains a deduplicated rolling 120-second observation set so a single short advertisement window does not erase previously observed devices.
 
 ## Verification
 
@@ -26,8 +26,8 @@ Platform unit tests cover canonical address formatting, standard AD parsing, mal
 cargo run -p remote-env-platform-windows --example windows_bluetooth_scan
 ```
 
-Observed on the validation host: `BLE available: true`, `Classic Bluetooth available: true`, `unique Bluetooth device count: 5`, duration `5587 ms`. Both values come from a real WinRT BLE watcher plus native Classic inquiry scan.
+Observed on the validation host after enabling extended advertisements: `BLE observations: 1`, `Classic observations: 3`, `unique Bluetooth device count: 4`, duration `10010 ms`. Both values come from a real WinRT BLE watcher plus native Classic inquiry scan. Counts remain environment-dependent: only currently discoverable advertisements/inquiry responses can be observed.
 
 ## Completion
 
-Phase 2-B is complete locally. The implementation includes the unified Collector, WinRT BLE watcher, native Classic inquiry, raw AD section retention, shared Runtime worker/config/status, single and multi-server fixtures, ACK isolation, disconnect recovery, dynamic enable/disable, shared UI status, and real Windows hardware validation. Real backend upload remains intentionally out of scope.
+Phase 2-B is complete locally. The implementation includes the unified Collector, WinRT BLE watcher with extended advertisements, native Classic inquiry, raw AD section retention, parallel source scans, reliable callback delivery, reusable rolling observations, shared Runtime worker/config/status, single and multi-server fixtures, ACK isolation, disconnect recovery, dynamic enable/disable, and shared UI status. When Wi-Fi and Bluetooth are enabled together, their latest compatible snapshots are uploaded as one `environment` envelope. Hardware discovery remains dependent on discoverable radio traffic and OS adapter behavior.

@@ -2,7 +2,7 @@ use futures_util::{SinkExt, StreamExt};
 use remote_env_core::collector::CollectorEvent;
 use remote_env_core::config::{ClientConfig, ServerMode, ServerProfile};
 use remote_env_core::protocol::AuthFrame;
-use remote_env_core::runtime::{RuntimeStatus, RuntimeSupervisor};
+use remote_env_core::runtime::{CollectorScan, RuntimeStatus, RuntimeSupervisor};
 use remote_env_core::state::StateStore;
 use remote_env_platform_windows::bluetooth::{
     BluetoothCollector, NativeBleScanner, NativeClassicBluetoothScanner,
@@ -29,6 +29,21 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 const STATUS_EVENT: &str = "runtime_status_changed";
 static LOG_PATH: OnceLock<PathBuf> = OnceLock::new();
+
+fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64
+}
+
+fn make_bluetooth_scan() -> CollectorScan {
+    let collector = std::sync::Arc::new(BluetoothCollector::new(
+        NativeBleScanner::new(),
+        NativeClassicBluetoothScanner::new(),
+    ));
+    std::sync::Arc::new(move || collector.scan_once().map_err(|error| error.to_string()))
+}
 
 pub struct AppState {
     runtime: Mutex<Option<RuntimeSupervisor>>,
@@ -618,7 +633,7 @@ fn connect_server_profile(
                         .and_then(|snapshot| {
                             Ok(CollectorEvent {
                                 data_type: "wifi".into(),
-                                timestamp_ms: 0,
+                                timestamp_ms: now_ms(),
                                 data: serde_json::to_value(snapshot).map_err(|error| {
                                     remote_env_platform_windows::wifi::WiFiError::InvalidData(
                                         error.to_string(),
@@ -628,14 +643,7 @@ fn connect_server_profile(
                         })
                         .map_err(|error| error.to_string())
                 })),
-                Some(std::sync::Arc::new(|| {
-                    BluetoothCollector::new(
-                        NativeBleScanner::new(),
-                        NativeClassicBluetoothScanner::new(),
-                    )
-                    .scan_once()
-                    .map_err(|error| error.to_string())
-                })),
+                Some(make_bluetooth_scan()),
             )
             .map_err(user_error)?,
         );
@@ -800,7 +808,7 @@ fn start_runtime(
                         .and_then(|snapshot| {
                             Ok(CollectorEvent {
                                 data_type: "wifi".into(),
-                                timestamp_ms: 0,
+                                timestamp_ms: now_ms(),
                                 data: serde_json::to_value(snapshot).map_err(|error| {
                                     remote_env_platform_windows::wifi::WiFiError::InvalidData(
                                         error.to_string(),
@@ -810,14 +818,7 @@ fn start_runtime(
                         })
                         .map_err(|error| error.to_string())
                 })),
-                Some(std::sync::Arc::new(|| {
-                    BluetoothCollector::new(
-                        NativeBleScanner::new(),
-                        NativeClassicBluetoothScanner::new(),
-                    )
-                    .scan_once()
-                    .map_err(|error| error.to_string())
-                })),
+                Some(make_bluetooth_scan()),
             )
             .map_err(user_error)?,
         );

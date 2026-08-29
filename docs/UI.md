@@ -6,7 +6,7 @@
 
 ## First Windows surface
 
-The UI reads `get_runtime_status` and renders the real `servers` list, including each profile's connection state and target delivery counts. Wi-Fi and Bluetooth status are sourced from the Runtime status model. Bluetooth is now represented by one shared Runtime status card; the UI does not claim separate BLE/Classic upload states. Detailed payloads retain `transport` (`ble`, `classic`, `dual`) and raw AD sections, while the main status displays the aggregate Bluetooth worker.
+The UI reads `get_runtime_status` and renders the real `servers` list, including each profile's connection state and target delivery counts. Wi-Fi and Bluetooth status are sourced from the Runtime status model, including continuously pushed latest snapshots. Bluetooth is represented by one shared Runtime status card; detailed payloads use the server-compatible `devices` list and retain `mode` (`ble`, `classic`, `dual`) plus raw advertisement sections. Card counts and detail dialogs update from background scans without requiring the manual Scan action. When both collectors are enabled, the Runtime displays one combined Bluetooth envelope upload success/failure count per ACK/result.
 
 ## Phase 2-C desktop UI
 

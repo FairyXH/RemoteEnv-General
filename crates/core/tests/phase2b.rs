@@ -193,7 +193,7 @@ async fn bluetooth_event_uses_shared_sequence_and_completes_delivery() {
         Ok(CollectorEvent {
             data_type: "bluetooth".into(),
             timestamp_ms: 1,
-            data: serde_json::json!({"observations":[{"address":"AA:BB:CC:DD:EE:01","transport":"ble","name":"fixture","rssi":-61},{"address":"11:22:33:44:55:66","transport":"classic","name":"Keyboard","class_of_device":123456}],"ble_available":true,"classic_available":true,"scan_duration_ms":4}),
+            data: serde_json::json!({"scan_started_at":1,"scan_finished_at":2,"technology":"bluetooth","devices":[{"address":"AA:BB:CC:DD:EE:01","mode":"ble","name":"fixture","rssi":-61},{"address":"11:22:33:44:55:66","mode":"classic","name":"Keyboard","classOfDevice":123456}],"ble_available":true,"classic_available":true,"scan_duration_ms":4}),
         })
     }) as Arc<dyn Fn() -> Result<CollectorEvent, String> + Send + Sync>;
     let run_config = config(url);
@@ -215,8 +215,8 @@ async fn bluetooth_event_uses_shared_sequence_and_completes_delivery() {
     let payload = received.lock().unwrap()[0].clone();
     assert_eq!(payload["data_type"], "bluetooth");
     assert!(payload["sequence"].as_u64().unwrap() > 1);
-    assert_eq!(payload["data"]["observations"][0]["transport"], "ble");
-    assert_eq!(payload["data"]["observations"][1]["transport"], "classic");
+    assert_eq!(payload["data"]["devices"][0]["mode"], "ble");
+    assert_eq!(payload["data"]["devices"][1]["mode"], "classic");
     tokio::time::timeout(Duration::from_secs(5), async {
         while !store
             .event_complete("phase2b-device", "bluetooth", payload["sequence"].as_u64().unwrap())
