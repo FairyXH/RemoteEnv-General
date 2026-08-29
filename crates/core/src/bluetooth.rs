@@ -37,6 +37,8 @@ pub struct BluetoothObservation {
     pub manufacturer_data: Vec<ManufacturerData>,
     pub service_data: Vec<ServiceData>,
     pub raw_advertisement_sections: Vec<RawAdvertisementSection>,
+    /// Complete BLE AD/scan-response bytes for RAW Base64 upload.
+    pub raw_advertisement: Option<Vec<u8>>,
     pub connectable: Option<bool>,
     pub class_of_device: Option<u32>,
     pub appearance: Option<u16>,

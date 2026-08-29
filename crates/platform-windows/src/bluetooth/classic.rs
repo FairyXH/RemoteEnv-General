@@ -80,6 +80,7 @@ impl ClassicBluetoothScanner for NativeClassicBluetoothScanner {
                         manufacturer_data: Vec::new(),
                         service_data: Vec::new(),
                         raw_advertisement_sections: Vec::new(),
+                        raw_advertisement: None,
                         connectable: None,
                         class_of_device: Some(info.ulClassofDevice),
                         appearance: None,

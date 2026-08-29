@@ -4,7 +4,16 @@
 
 Read this file, `ARCHITECTURE.md`, and `DEVELOPMENT.md` before changes. For transport work also read `PROTOCOL.md` and `WEBSOCKET.md`.
 
-## Current state
+## Current round: Windows Bluetooth RAW upload format
+
+Status: Implemented locally; Release verification pending.
+
+Windows BLE observations now retain the complete AD/scan-response byte stream and serialize the server/VirEnvTester-compatible fields on each `data.devices` record: `rawHex`, `rawLength`, and `raw`, where `raw` is standard ASCII Base64. Classic Bluetooth records keep these fields absent because the native inquiry API does not provide advertisement bytes. The existing parsed fields and `rawAdvertisementSections` remain available; this change does not alter `data_type` (`bluetooth`) or the combined envelope structure.
+
+Verified: `cargo fmt --all` and `cargo test -p remote-env-platform-windows` passed (12 tests), including exact Base64 regression coverage; `cargo check --workspace` passed before the final test-only correction. UI source is unchanged because it already renders the JSON details generically, but a fresh UI build and packaged Release build are still required for this round. Real hardware and real backend upload were not rerun in this round.
+
+Core files changed: `crates/core/src/bluetooth.rs`, `crates/platform-windows/src/bluetooth/ble.rs`, `crates/platform-windows/src/bluetooth/classic.rs`, `crates/platform-windows/src/bluetooth/model.rs`, `crates/platform-windows/src/bluetooth/collector.rs`. Next: run full workspace/UI gates, build `Release/Windows`, launch the copied executable, inspect git state, and record the final commit. Phase 2-B remains locally complete; this format round is not Complete until Release verification passes.
+
 
 Phase 2-C desktop lifecycle repair remains Partial. This round found that the persisted user config had `heartbeat_interval_seconds=15` and `scan_interval_seconds=30`, while the Runtime worker previously hardcoded/used inconsistent values. It also found that existing AppData logs contained only Tauri command-entry records, not worker protocol or scan evidence. Source changes now add safer status intent handling, async supervisor join behavior, richer bridge logging, UI listener reconciliation, per-operation busy guards, and protocol control-frame tolerance. These changes compile, but they are not accepted as behaviorally complete until the full integration tests and real desktop clicks pass.
 

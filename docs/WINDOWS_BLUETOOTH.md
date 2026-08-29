@@ -16,7 +16,7 @@ BLE AD parsing covers flags/connectability, complete and shortened local name, 1
 
 Classic discovery uses `BluetoothFindFirstRadio`, `BluetoothFindFirstDevice`, `BluetoothFindNextDevice`, and their close functions from `bluetoothapis.dll` through `windows-sys`. The native structure reliably supplies address, name, class of device, and discovery flags; RSSI and advertisement/service payloads are left unavailable. The synchronous inquiry must be isolated from the Runtime control thread when integrated.
 
-The BLE WinRT `Windows.Devices.Bluetooth.Advertisement.BluetoothLEAdvertisementWatcher` is implemented through the `windows` crate. It initializes WinRT MTA, uses active scanning with extended advertisements enabled, extracts address, RSSI, local name, service UUIDs, manufacturer data, connectability, and Tx power in an event handler, sends observations through a reliable channel, then stops and unregisters the handler at the end of the scan window. BLE and Classic scans run concurrently, and the collector retains a deduplicated rolling 120-second observation set so a single short advertisement window does not erase previously observed devices.
+The BLE payload now preserves the complete raw advertisement/scan-response bytes in the VirEnvTester-compatible device fields: `rawHex` (uppercase hex), `rawLength` (byte count), and `raw` (standard Base64). `rawAdvertisementSections` remains as structured diagnostic detail. Classic inquiry records omit RAW fields because `BLUETOOTH_DEVICE_INFO` does not expose advertisement bytes.
 
 ## Verification
 

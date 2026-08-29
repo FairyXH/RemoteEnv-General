@@ -21,6 +21,7 @@ pub struct BleAdvertisement {
     pub manufacturer_data: Vec<remote_env_core::bluetooth::ManufacturerData>,
     pub service_data: Vec<remote_env_core::bluetooth::ServiceData>,
     pub raw_advertisement_sections: Vec<RawAdvertisementSection>,
+    pub raw_advertisement: Option<Vec<u8>>,
     pub connectable: Option<bool>,
     pub appearance: Option<u16>,
     pub tx_power: Option<i16>,
@@ -46,6 +47,7 @@ fn guid_string(guid: GUID) -> String {
 
 pub fn parse_advertisement(raw: &[u8]) -> BleAdvertisement {
     let mut result = BleAdvertisement::default();
+    result.raw_advertisement = Some(raw.to_vec());
     let mut offset = 0;
     while offset < raw.len() {
         let length = raw[offset] as usize;
@@ -179,6 +181,7 @@ impl BleScanner for NativeBleScanner {
                 "advertisement"
             };
             let mut raw_advertisement_sections = Vec::new();
+            let mut raw_advertisement = Vec::new();
             if let Ok(sections) = advertisement.DataSections() {
                 for index in 0..sections.Size()? {
                     let Ok(section) = sections.GetAt(index) else {
@@ -190,6 +193,12 @@ impl BleScanner for NativeBleScanner {
                     let Ok(data) = read_buffer(buffer) else {
                         continue;
                     };
+                    let length = data.len().saturating_add(1);
+                    if length <= u8::MAX as usize {
+                        raw_advertisement.push(length as u8);
+                        raw_advertisement.push(ad_type);
+                        raw_advertisement.extend_from_slice(&data);
+                    }
                     raw_advertisement_sections.push(RawAdvertisementSection {
                         source: source.into(),
                         ad_type,
@@ -210,6 +219,7 @@ impl BleScanner for NativeBleScanner {
                 manufacturer_data,
                 service_data: Vec::new(),
                 raw_advertisement_sections,
+                raw_advertisement: (!raw_advertisement.is_empty()).then_some(raw_advertisement),
                 connectable: args.IsConnectable().ok(),
                 class_of_device: None,
                 appearance: None,
@@ -269,6 +279,7 @@ mod tests {
         assert_eq!(parsed.service_uuids, vec!["180D", "180F"]);
         assert_eq!(parsed.raw_advertisement_sections[0].ad_type, 0x20);
         assert_eq!(parsed.raw_advertisement_sections[0].data_hex, "DEADBE");
+        assert_eq!(parsed.raw_advertisement.as_deref(), Some(raw.as_slice()));
         let event = serde_json::json!({"observations": [{"raw_advertisement_sections": parsed.raw_advertisement_sections}]});
         assert_eq!(
             event["observations"][0]["raw_advertisement_sections"][0]["data_hex"],

@@ -41,6 +41,9 @@ pub fn merge_observations(
                 if item.tx_power.is_some() {
                     existing.tx_power = item.tx_power;
                 }
+                if item.raw_advertisement.is_some() {
+                    existing.raw_advertisement = item.raw_advertisement.clone();
+                }
                 existing.timestamp_ms = item.timestamp_ms;
             }
             if existing.transport != item.transport {

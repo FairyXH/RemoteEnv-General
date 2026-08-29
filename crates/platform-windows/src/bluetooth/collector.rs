@@ -53,12 +53,15 @@ impl<B: BleScanner + 'static, C: ClassicBluetoothScanner + 'static> BluetoothCol
         }
         let mut observations = ble.unwrap_or_default();
         observations.extend(classic.unwrap_or_default());
-        let mut rolling = self
-            .rolling
-            .lock()
-            .map_err(|_| BluetoothError::Unavailable("rolling Bluetooth snapshot unavailable".into()))?;
+        let mut rolling = self.rolling.lock().map_err(|_| {
+            BluetoothError::Unavailable("rolling Bluetooth snapshot unavailable".into())
+        })?;
         rolling.extend(observations);
-        let newest = rolling.iter().map(|item| item.timestamp_ms).max().unwrap_or_else(now_ms);
+        let newest = rolling
+            .iter()
+            .map(|item| item.timestamp_ms)
+            .max()
+            .unwrap_or_else(now_ms);
         let cutoff = newest.saturating_sub(120_000);
         rolling.retain(|item| item.timestamp_ms >= cutoff);
         let observations = merge_observations(rolling.clone(), self.allow_cross_transport_merge);
@@ -90,6 +93,9 @@ impl<B: BleScanner + 'static, C: ClassicBluetoothScanner + 'static> BluetoothCol
                     "manufacturerData": observation.manufacturer_data.iter().map(|item| (item.company_id.to_string(), hex_encode(&item.data))).collect::<std::collections::HashMap<_, _>>(),
                     "serviceData": observation.service_data.iter().map(|item| (item.uuid.clone(), hex_encode(&item.data))).collect::<std::collections::HashMap<_, _>>(),
                     "rawAdvertisementSections": observation.raw_advertisement_sections,
+                    "rawHex": observation.raw_advertisement.as_ref().map(|value| hex_encode(value)),
+                    "rawLength": observation.raw_advertisement.as_ref().map(Vec::len),
+                    "raw": observation.raw_advertisement.as_ref().map(|value| base64_encode(value)),
                     "connectable": observation.connectable,
                     "appearance": observation.appearance,
                     "timestamp": observation.timestamp_ms,
@@ -112,16 +118,20 @@ impl<B: BleScanner + 'static, C: ClassicBluetoothScanner + 'static> BluetoothCol
         })
     }
 }
-impl<B: BleScanner + 'static, C: ClassicBluetoothScanner + 'static> BluetoothProvider for BluetoothCollector<B, C> {
+impl<B: BleScanner + 'static, C: ClassicBluetoothScanner + 'static> BluetoothProvider
+    for BluetoothCollector<B, C>
+{
     fn scan(&self) -> BluetoothScanResult {
         let ble = Arc::clone(&self.ble);
         let classic = Arc::clone(&self.classic);
         let ble_thread = std::thread::spawn(move || ble.scan());
         let classic_thread = std::thread::spawn(move || classic.scan());
         BluetoothScanResult {
-            ble: ble_thread
-                .join()
-                .unwrap_or_else(|_| Err(BluetoothError::Unavailable("BLE scanner thread panicked".into()))),
+            ble: ble_thread.join().unwrap_or_else(|_| {
+                Err(BluetoothError::Unavailable(
+                    "BLE scanner thread panicked".into(),
+                ))
+            }),
             classic: classic_thread.join().unwrap_or_else(|_| {
                 Err(BluetoothError::Unavailable(
                     "Classic Bluetooth scanner thread panicked".into(),
@@ -141,6 +151,29 @@ fn now_ms() -> i64 {
 
 fn hex_encode(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02X}")).collect()
+}
+
+fn base64_encode(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut output = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let value = ((chunk[0] as u32) << 16)
+            | ((chunk.get(1).copied().unwrap_or_default() as u32) << 8)
+            | chunk.get(2).copied().unwrap_or_default() as u32;
+        output.push(TABLE[((value >> 18) & 0x3f) as usize] as char);
+        output.push(TABLE[((value >> 12) & 0x3f) as usize] as char);
+        output.push(if chunk.len() > 1 {
+            TABLE[((value >> 6) & 0x3f) as usize] as char
+        } else {
+            '='
+        });
+        output.push(if chunk.len() > 2 {
+            TABLE[(value & 0x3f) as usize] as char
+        } else {
+            '='
+        });
+    }
+    output
 }
 
 #[cfg(test)]
@@ -169,6 +202,7 @@ mod tests {
             manufacturer_data: vec![],
             service_data: vec![],
             raw_advertisement_sections: vec![],
+            raw_advertisement: None,
             connectable: None,
             class_of_device: None,
             appearance: None,
@@ -215,6 +249,18 @@ mod tests {
         );
         assert!(collector.scan_once().is_err());
     }
+    #[test]
+    fn uploads_complete_raw_record_as_base64_with_vir_env_tester_keys() {
+        let mut observation = obs(BluetoothTransport::Ble, 1);
+        observation.raw_advertisement = Some(vec![0x02, 0x01, 0x06, 0x03, 0xFF, 0x4C, 0x00]);
+        let collector =
+            BluetoothCollector::new(MockBle(Ok(vec![observation])), MockClassic(Ok(vec![])));
+        let device = &collector.scan_once().unwrap().data["devices"][0];
+        assert_eq!(device["rawHex"], "02010603FF4C00");
+        assert_eq!(device["rawLength"], 7);
+        assert_eq!(device["raw"], "AgEGA/9MAA==");
+    }
+
     #[test]
     fn explicit_cross_transport_merge_is_dual() {
         let collector = BluetoothCollector::new(
