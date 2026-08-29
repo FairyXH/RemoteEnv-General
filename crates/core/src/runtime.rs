@@ -159,7 +159,9 @@ impl PeriodicCollectorHandle {
     }
     fn stop(&mut self) {
         self.stop.store(true, Ordering::Release);
-        let _ = self.thread.take();
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
     }
 }
 
@@ -233,7 +235,9 @@ impl BluetoothWorkerHandle {
     }
     fn stop(&mut self) {
         self.stop.store(true, Ordering::Release);
-        let _ = self.thread.take();
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
     }
 }
 
@@ -373,7 +377,7 @@ pub struct Runtime {
 
 pub struct RuntimeSupervisor {
     events: mpsc::Sender<CollectorEvent>,
-    commands: mpsc::Sender<RuntimeCommand>,
+    commands: mpsc::UnboundedSender<RuntimeCommand>,
     status: watch::Receiver<RuntimeStatus>,
     stop: Option<tokio::sync::oneshot::Sender<()>>,
     thread: Option<JoinHandle<()>>,
@@ -404,7 +408,7 @@ impl RuntimeSupervisor {
             return Err(RuntimeError::Dispatcher(DispatcherError::NoTargets));
         }
         let (events, mut event_rx) = mpsc::channel::<CollectorEvent>(128);
-        let (commands, mut command_rx) = mpsc::channel::<RuntimeCommand>(16);
+        let (commands, mut command_rx) = mpsc::unbounded_channel::<RuntimeCommand>();
         let (status_tx, status) = watch::channel(RuntimeStatus::default());
         let (stop, mut stop_rx) = tokio::sync::oneshot::channel();
         let (wifi_status_tx, mut wifi_status_rx) = mpsc::channel::<WiFiRuntimeStatus>(16);
@@ -418,7 +422,7 @@ impl RuntimeSupervisor {
                 let Ok(runtime) = tokio::runtime::Runtime::new() else { return; };
                 runtime.block_on(async move {
                     let dispatcher = UploadDispatcher::new(store.clone());
-                    let mut supervisor = DispatcherSupervisor::new(dispatcher.clone(), config.identity.clone(), Duration::from_secs(5));
+                    let mut supervisor = DispatcherSupervisor::new(dispatcher.clone(), config.identity.clone(), Duration::from_secs(config.heartbeat_interval_seconds));
                     supervisor.apply_config(&config).await;
                     for profile in config.selected_servers() {
                         let _ = dispatcher.unblock_target(&profile.id);
@@ -527,7 +531,7 @@ impl RuntimeSupervisor {
 
     pub fn update_config(&self, config: ClientConfig) -> Result<(), RuntimeError> {
         self.commands
-            .try_send(RuntimeCommand::Config(config))
+            .send(RuntimeCommand::Config(config))
             .map_err(|_| RuntimeError::EventChannelClosed)
     }
 
@@ -537,7 +541,7 @@ impl RuntimeSupervisor {
         running: bool,
     ) -> Result<(), RuntimeError> {
         self.commands
-            .try_send(RuntimeCommand::Collection { config, running })
+            .send(RuntimeCommand::Collection { config, running })
             .map_err(|_| RuntimeError::EventChannelClosed)
     }
 
@@ -545,9 +549,9 @@ impl RuntimeSupervisor {
         if let Some(stop) = self.stop.take() {
             let _ = stop.send(());
         }
-        // The runtime thread is already stopped through the cancellation channel.
-        // Dropping the join handle avoids blocking the Tauri command on native scans.
-        let _ = self.thread.take();
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
     }
 }
 
