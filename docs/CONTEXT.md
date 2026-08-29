@@ -79,7 +79,7 @@ Root causes found: Phase 2 fixtures did not issue the explicit collection activa
 
 ## Commits in this round
 
-`9b5e530`, `acff961`, `6bef0ac`, `c26afd6`, `f2e8d2c`, `1cb6f99`.
+`9b5e530`, `acff961`, `6bef0ac`, `c26afd6`, `f2e8d2c`, `1cb6f99`, `58d0851`, `9234c10`.
 
 ## Known issues / next step
 
