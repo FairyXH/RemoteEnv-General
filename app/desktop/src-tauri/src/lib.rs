@@ -791,15 +791,16 @@ fn stop_runtime(
     info("收到停止采集服务请求");
     let config = load_config(&state.state_path)?.1;
     {
-        let guard = state
+        let mut guard = state
             .runtime
             .lock()
             .map_err(|_| "应用状态不可用。".to_string())?;
-        if let Some(runtime) = guard.as_ref() {
+        if let Some(mut runtime) = guard.take() {
             runtime
                 .set_collection_running(config, false)
                 .map_err(user_error)?;
-            info("采集服务停止命令已发送");
+            runtime.stop();
+            info("采集服务及其服务器、采集器已停止");
         }
     }
     let status = current_status(&state)?;
