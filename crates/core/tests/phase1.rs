@@ -242,7 +242,7 @@ async fn websocket_fixture_authenticates_uploads_and_requires_matching_ack() {
     let result = manager
         .run_once(&format!("ws://{address}"), "test-token", &identity, &queue)
         .await;
-    assert!(result.is_err());
+    assert!(result.is_ok());
     assert_eq!(queue.pending_count().unwrap(), 0);
     server.await.unwrap();
 }

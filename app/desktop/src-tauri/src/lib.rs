@@ -35,6 +35,43 @@ pub struct AppState {
     state_path: PathBuf,
     log_path: PathBuf,
     exiting: AtomicBool,
+    _instance_guard: SingleInstanceGuard,
+}
+
+#[cfg(windows)]
+struct SingleInstanceGuard(isize);
+
+#[cfg(windows)]
+impl Drop for SingleInstanceGuard {
+    fn drop(&mut self) {
+        unsafe {
+            windows_sys::Win32::Foundation::CloseHandle(
+                self.0 as windows_sys::Win32::Foundation::HANDLE,
+            );
+        }
+    }
+}
+
+#[cfg(not(windows))]
+struct SingleInstanceGuard;
+
+fn acquire_instance_guard() -> Result<SingleInstanceGuard, String> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::{Foundation::{GetLastError, ERROR_ALREADY_EXISTS}, System::Threading::CreateMutexW};
+        let name: Vec<u16> = std::ffi::OsStr::new("Global\\RemoteEnvCollector.SingleInstance")
+            .encode_wide().chain(std::iter::once(0)).collect();
+        let handle = unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
+        if handle.is_null() { return Err("无法创建应用单实例锁。".into()); }
+        if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
+            unsafe { windows_sys::Win32::Foundation::CloseHandle(handle); }
+            return Err("RemoteEnvCollector 已在运行，请使用现有窗口或托盘实例。".into());
+        }
+        return Ok(SingleInstanceGuard(handle as isize));
+    }
+    #[cfg(not(windows))]
+    { Ok(SingleInstanceGuard) }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -873,6 +910,7 @@ pub fn run() {
                 state_path: path.clone(),
                 log_path: log_path(&app.handle()).map_err(|error| std::io::Error::other(error))?,
                 exiting: AtomicBool::new(false),
+                _instance_guard: acquire_instance_guard().map_err(std::io::Error::other)?,
             });
             init_logging(log_path(&app.handle()).map_err(|error| std::io::Error::other(error))?);
             info("应用启动");

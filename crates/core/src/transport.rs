@@ -2,7 +2,7 @@ use crate::config::DeviceIdentity;
 use crate::protocol::{Ack, AuthFrame, EnvironmentEnvelope};
 use crate::queue::{QueueError, QueuedEnvelope, UploadQueue};
 use crate::state::StateError;
-use futures_util::{SinkExt, StreamExt};
+use futures_util::{Sink, SinkExt, StreamExt};
 use serde::{Serialize, Serializer};
 use serde_json::Value;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -40,7 +40,7 @@ impl WebSocketManager {
             backoff: Backoff::new(1, 60),
             heartbeat: HeartbeatMonitor::new(
                 HEARTBEAT_INTERVAL,
-                HEARTBEAT_INTERVAL.saturating_mul(3),
+                Duration::from_secs(60),
             ),
         }
     }
@@ -76,10 +76,7 @@ impl WebSocketManager {
             .send(Message::Text(serde_json::to_string(&auth)?.into()))
             .await?;
         self.state = ConnectionState::Authenticating;
-        let auth_result = socket.next().await.ok_or_else(|| {
-            WebSocketError::Authentication("connection closed before auth_result".into())
-        })??;
-        let auth_value: Value = serde_json::from_str(auth_result.to_text()?)?;
+        let auth_value = next_json_frame(&mut socket, "auth_result").await?;
         if classify_server_message(auth_value["type"].as_str().unwrap_or_default(), None)
             != ServerEvent::Authenticated
             || auth_value["success"] != true
@@ -93,11 +90,7 @@ impl WebSocketManager {
         }
         self.state = ConnectionState::Ready;
         self.backoff.reset();
-        self.heartbeat.mark_pong();
-        let device_list = socket.next().await.ok_or_else(|| {
-            WebSocketError::Authentication("connection closed before device_list".into())
-        })??;
-        let device_list_value: Value = serde_json::from_str(device_list.to_text()?)?;
+        let device_list_value = next_json_frame(&mut socket, "device_list").await?;
         if classify_server_message(device_list_value["type"].as_str().unwrap_or_default(), None)
             != ServerEvent::DeviceList
         {
@@ -119,7 +112,12 @@ impl WebSocketManager {
                                 "connection closed while uploading".into(),
                             )
                         })??;
-                        let value: Value = serde_json::from_str(message.to_text()?)?;
+                        let value: Value = match message {
+                            Message::Text(text) => serde_json::from_str(&text)?,
+                            Message::Ping(payload) => { socket.send(Message::Pong(payload)).await?; continue; }
+                            Message::Pong(_) | Message::Binary(_) | Message::Frame(_) => continue,
+                            Message::Close(_) => return Err(WebSocketError::Authentication("connection closed while uploading".into())),
+                        };
                         match classify_server_message(
                             value["type"].as_str().unwrap_or_default(),
                             value["code"].as_str(),
@@ -159,7 +157,7 @@ impl WebSocketManager {
                 .map_err(|_| WebSocketError::Authentication("ACK timeout".into()))?;
                 ack_result?;
                 queue.acknowledge(&item)?;
-                continue;
+                return Ok(());
             }
 
             tokio::select! {
@@ -169,16 +167,27 @@ impl WebSocketManager {
                     let pong = tokio::time::timeout(self.heartbeat.interval(), socket.next()).await
                         .map_err(|_| WebSocketError::Authentication("heartbeat timeout".into()))?
                         .ok_or_else(|| WebSocketError::Authentication("connection closed during heartbeat".into()))??;
-                    let value: Value = serde_json::from_str(pong.to_text()?)?;
-                    if classify_server_message(value["type"].as_str().unwrap_or_default(), None) == ServerEvent::Pong {
-                        self.heartbeat.mark_pong();
+                    match pong {
+                        Message::Text(text) => {
+                            let value: Value = serde_json::from_str(&text)?;
+                            if classify_server_message(value["type"].as_str().unwrap_or_default(), None) == ServerEvent::Pong { self.heartbeat.mark_pong(); }
+                        }
+                        Message::Pong(_) => self.heartbeat.mark_pong(),
+                        Message::Ping(payload) => { socket.send(Message::Pong(payload)).await?; }
+                        Message::Binary(_) | Message::Frame(_) => {}
+                        Message::Close(_) => return Err(WebSocketError::Authentication("connection closed during heartbeat".into())),
                     }
                 }
                 message = socket.next() => {
                     let Some(message) = message else {
                         return Err(WebSocketError::Authentication("connection closed".into()));
                     };
-                    let value: Value = serde_json::from_str(message?.to_text()?)?;
+                    let value: Value = match message? {
+                        Message::Text(text) => serde_json::from_str(&text)?,
+                        Message::Ping(payload) => { socket.send(Message::Pong(payload)).await?; continue; }
+                        Message::Pong(_) | Message::Binary(_) | Message::Frame(_) => continue,
+                        Message::Close(_) => return Err(WebSocketError::Authentication("connection closed".into())),
+                    };
                     if classify_server_message(value["type"].as_str().unwrap_or_default(), value["code"].as_str()) == ServerEvent::FatalError {
                         return Err(WebSocketError::Authentication(value["message"].as_str().unwrap_or_default().into()));
                     }
@@ -189,6 +198,27 @@ impl WebSocketManager {
 
     pub fn next_reconnect_delay(&mut self) -> Duration {
         self.backoff.delay()
+    }
+}
+
+async fn next_json_frame<S>(socket: &mut S, expected: &str) -> Result<Value, WebSocketError>
+where
+    S: StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>>
+        + Sink<Message, Error = tokio_tungstenite::tungstenite::Error>
+        + Unpin,
+    S::Item: Into<Result<Message, tokio_tungstenite::tungstenite::Error>>,
+{
+    loop {
+        let frame = socket
+            .next()
+            .await
+            .ok_or_else(|| WebSocketError::Authentication(format!("connection closed before {expected}")))??;
+        match frame {
+            Message::Text(text) => return Ok(serde_json::from_str(&text)?),
+            Message::Ping(payload) => { socket.send(Message::Pong(payload)).await?; }
+            Message::Pong(_) | Message::Binary(_) | Message::Frame(_) => {}
+            Message::Close(_) => return Err(WebSocketError::Authentication(format!("connection closed before {expected}"))),
+        }
     }
 }
 
