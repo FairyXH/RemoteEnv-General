@@ -54,8 +54,9 @@ Status: Partial. All local code and test gates pass, and real Windows hardware s
 - `cargo run -p remote-env-platform-windows --example windows_wifi_scan`: PASS, 1 interface, 10 networks, 1501 ms.
 - `netsh wlan show interfaces`: Hardware On, Software On.
 - `netsh wlan show networks mode=bssid`: 6 visible SSID groups, multiple BSS entries.
-- Security scan: no `rev1_` matches; `CollectTestor` appears only in the explicit environment-based smoke-test code/docs; no credential value is stored.
-
+- Root build entrypoint: `build-release-windows.bat` uses `%~dp0`/relative paths, runs `cargo clean`, invokes `scripts/build-release.ps1`, writes the root log, validates EXE/installer existence and size, then pauses for double-click visibility. The BAT was executed via `cmd`, but its console output is not reliable in the non-interactive tool host; the direct PowerShell release script run succeeded and produced the artifacts below.
+- Latest direct release verification log: `release-build-final.log`; React build, Tauri optimized build, and NSIS bundle all PASS.
+- Latest artifacts: `Release/Windows/RemoteEnvCollector/RemoteEnvCollector.exe` (12,094,464 bytes) and `Release/Windows/RemoteEnvCollector-Setup.exe` (3,059,986 bytes), version `0.2.0`; packaged EXE remained alive and responsive for 5 seconds.
 ## Phase 2-C status
 
 Status: Partial. Windows Release pipeline, unified version `0.2.0`, Chinese desktop UI, server profile CRUD, token masking, runtime status push, and close-to-tray lifecycle are implemented. Portable artifact generation is available through `scripts/build-release.ps1`. Clean-machine execution, installer execution, and final release smoke evidence remain pending.
