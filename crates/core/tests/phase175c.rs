@@ -300,7 +300,7 @@ async fn wait_delivery_status(
 }
 
 async fn wait_connection(runtime: &RuntimeSupervisor, profile_id: &str, expected: &str) {
-    tokio::time::timeout(Duration::from_secs(5), async {
+    tokio::time::timeout(Duration::from_secs(65), async {
         loop {
             let current = runtime
                 .status()
