@@ -5,7 +5,7 @@ use super::{
 };
 use remote_env_core::bluetooth::{BluetoothObservation, BluetoothSnapshot};
 use remote_env_core::collector::CollectorEvent;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 pub struct BluetoothScanResult {
@@ -22,13 +22,15 @@ pub struct BluetoothCollector<B = NativeBleScanner, C = NativeClassicBluetoothSc
     ble: Arc<B>,
     classic: Arc<C>,
     allow_cross_transport_merge: bool,
+    rolling: Arc<Mutex<Vec<BluetoothObservation>>>,
 }
-impl<B: BleScanner, C: ClassicBluetoothScanner> BluetoothCollector<B, C> {
+impl<B: BleScanner + 'static, C: ClassicBluetoothScanner + 'static> BluetoothCollector<B, C> {
     pub fn new(ble: B, classic: C) -> Self {
         Self {
             ble: Arc::new(ble),
             classic: Arc::new(classic),
             allow_cross_transport_merge: false,
+            rolling: Arc::new(Mutex::new(Vec::new())),
         }
     }
     pub fn with_cross_transport_merge(mut self, enabled: bool) -> Self {
@@ -51,8 +53,18 @@ impl<B: BleScanner, C: ClassicBluetoothScanner> BluetoothCollector<B, C> {
         }
         let mut observations = ble.unwrap_or_default();
         observations.extend(classic.unwrap_or_default());
+        let mut rolling = self
+            .rolling
+            .lock()
+            .map_err(|_| BluetoothError::Unavailable("rolling Bluetooth snapshot unavailable".into()))?;
+        rolling.extend(observations);
+        let newest = rolling.iter().map(|item| item.timestamp_ms).max().unwrap_or_else(now_ms);
+        let cutoff = newest.saturating_sub(120_000);
+        rolling.retain(|item| item.timestamp_ms >= cutoff);
+        let observations = merge_observations(rolling.clone(), self.allow_cross_transport_merge);
+        *rolling = observations.clone();
         let snapshot = BluetoothSnapshot {
-            observations: merge_observations(observations, self.allow_cross_transport_merge),
+            observations,
             ble_available,
             classic_available,
             scan_duration_ms: started.elapsed().as_millis() as u64,
@@ -65,11 +77,21 @@ impl<B: BleScanner, C: ClassicBluetoothScanner> BluetoothCollector<B, C> {
         })
     }
 }
-impl<B: BleScanner, C: ClassicBluetoothScanner> BluetoothProvider for BluetoothCollector<B, C> {
+impl<B: BleScanner + 'static, C: ClassicBluetoothScanner + 'static> BluetoothProvider for BluetoothCollector<B, C> {
     fn scan(&self) -> BluetoothScanResult {
+        let ble = Arc::clone(&self.ble);
+        let classic = Arc::clone(&self.classic);
+        let ble_thread = std::thread::spawn(move || ble.scan());
+        let classic_thread = std::thread::spawn(move || classic.scan());
         BluetoothScanResult {
-            ble: self.ble.scan(),
-            classic: self.classic.scan(),
+            ble: ble_thread
+                .join()
+                .unwrap_or_else(|_| Err(BluetoothError::Unavailable("BLE scanner thread panicked".into()))),
+            classic: classic_thread.join().unwrap_or_else(|_| {
+                Err(BluetoothError::Unavailable(
+                    "Classic Bluetooth scanner thread panicked".into(),
+                ))
+            }),
             ble_available: self.ble.available(),
             classic_available: self.classic.available(),
         }

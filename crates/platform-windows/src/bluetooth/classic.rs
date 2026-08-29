@@ -54,7 +54,7 @@ impl ClassicBluetoothScanner for NativeClassicBluetoothScanner {
                 fReturnUnknown: 1,
                 fReturnConnected: 1,
                 fIssueInquiry: 1,
-                cTimeoutMultiplier: 2,
+                cTimeoutMultiplier: 4,
                 hRadio: radio,
             };
             let mut info = BLUETOOTH_DEVICE_INFO {

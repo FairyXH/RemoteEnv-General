@@ -32,6 +32,44 @@ fn persist_latest_events(
     config: &ClientConfig,
     latest_events: &mut HashMap<String, CollectorEvent>,
 ) -> Result<(), RuntimeError> {
+    if config.wifi_enabled && config.bluetooth_enabled {
+        let (Some(wifi), Some(bluetooth)) = (
+            latest_events.get("wifi").cloned(),
+            latest_events.get("bluetooth").cloned(),
+        ) else {
+            return Ok(());
+        };
+        let max_skew_ms = 15_000_i64;
+        if (wifi.timestamp_ms - bluetooth.timestamp_ms).abs() > max_skew_ms {
+            if wifi.timestamp_ms < bluetooth.timestamp_ms {
+                latest_events.remove("wifi");
+            } else {
+                latest_events.remove("bluetooth");
+            }
+            return Ok(());
+        }
+        latest_events.remove("wifi");
+        latest_events.remove("bluetooth");
+        let device_id = config.identity.device_id.clone();
+        let captured_at_ms = now_ms();
+        let sequence = store.next_timestamp_sequence(&device_id, "environment")?;
+        let envelope = EnvironmentEnvelope {
+            timestamp: captured_at_ms,
+            sequence,
+            ..EnvironmentEnvelope::new(
+                device_id,
+                "environment",
+                sequence,
+                serde_json::json!({
+                    "captured_at_ms": captured_at_ms,
+                    "wifi": wifi.data,
+                    "bluetooth": bluetooth.data,
+                }),
+            )
+        };
+        dispatcher.persist_event(config, &envelope)?;
+        return Ok(());
+    }
     for (_, event) in latest_events.drain() {
         let device_id = config.identity.device_id.clone();
         let timestamp = now_ms();
@@ -342,6 +380,8 @@ pub struct RuntimeStatus {
     pub blocked: usize,
     pub uploaded: u64,
     pub failed: u64,
+    pub wifi_snapshot: Option<serde_json::Value>,
+    pub bluetooth_snapshot: Option<serde_json::Value>,
     pub servers: Vec<ServerWorkerStatus>,
 }
 
@@ -361,6 +401,8 @@ impl Default for RuntimeStatus {
             blocked: 0,
             uploaded: 0,
             failed: 0,
+            wifi_snapshot: None,
+            bluetooth_snapshot: None,
             servers: Vec::new(),
         }
     }
@@ -433,6 +475,8 @@ impl RuntimeSupervisor {
                     let mut upload_tick = tokio::time::interval(Duration::from_millis(100));
                     upload_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                     let mut latest_events: HashMap<String, CollectorEvent> = HashMap::new();
+                    let mut wifi_snapshot: Option<serde_json::Value> = None;
+                    let mut bluetooth_snapshot: Option<serde_json::Value> = None;
                     let worker = scan.map(|scan| PeriodicCollectorHandle::start(scan, false, Duration::from_secs(current_config.scan_interval_seconds), events_for_worker.clone(), wifi_status_tx));
                     let bluetooth_worker = bluetooth_scan.map(|scan| BluetoothWorkerHandle::start(scan, false, Duration::from_secs(current_config.scan_interval_seconds), events_for_bluetooth_worker.clone(), bluetooth_status_tx));
                     let mut wifi_runtime = WiFiRuntimeStatus::default();
@@ -441,6 +485,11 @@ impl RuntimeSupervisor {
                         tokio::select! {
                             _ = &mut stop_rx => break,
                             Some(event) = event_rx.recv() => {
+                                if event.data_type == "wifi" {
+                                    wifi_snapshot = Some(event.data.clone());
+                                } else if event.data_type == "bluetooth" {
+                                    bluetooth_snapshot = Some(event.data.clone());
+                                }
                                 latest_events.insert(event.data_type.clone(), event);
                                 if collection_running {
                                     if let Err(error) = persist_latest_events(&store, &dispatcher, &current_config, &mut latest_events) {
@@ -497,6 +546,10 @@ impl RuntimeSupervisor {
                                 snapshot.pending = snapshot.servers.iter().map(|s| s.pending).sum();
                                 snapshot.in_flight = snapshot.servers.iter().map(|s| s.in_flight).sum();
                                 snapshot.blocked = snapshot.servers.iter().map(|s| s.blocked).sum();
+                                snapshot.uploaded = snapshot.servers.iter().map(|s| s.uploaded).sum();
+                                snapshot.failed = snapshot.servers.iter().map(|s| s.failed).sum();
+                                snapshot.wifi_snapshot = wifi_snapshot.clone();
+                                snapshot.bluetooth_snapshot = bluetooth_snapshot.clone();
                                 snapshot.wifi_runtime = wifi_runtime.clone(); snapshot.wifi = match wifi_runtime.state { WiFiRuntimeState::Disabled => CollectorStatus::Disabled, WiFiRuntimeState::Starting => CollectorStatus::Starting, WiFiRuntimeState::Scanning => CollectorStatus::Scanning, WiFiRuntimeState::Ready => CollectorStatus::Ready, WiFiRuntimeState::Error => CollectorStatus::Error, WiFiRuntimeState::Stopped => CollectorStatus::Stopped };
                                 snapshot.bluetooth_runtime = bluetooth_runtime.clone(); snapshot.bluetooth = match bluetooth_runtime.state { WiFiRuntimeState::Disabled => CollectorStatus::Disabled, WiFiRuntimeState::Starting => CollectorStatus::Starting, WiFiRuntimeState::Scanning => CollectorStatus::Scanning, WiFiRuntimeState::Ready => CollectorStatus::Ready, WiFiRuntimeState::Error => CollectorStatus::Error, WiFiRuntimeState::Stopped => CollectorStatus::Stopped };
                                 let _ = status_tx.send(snapshot);
@@ -622,6 +675,8 @@ impl Runtime {
             blocked: self.queue.blocked_count()?,
             uploaded: self.uploaded,
             failed: self.failed,
+            wifi_snapshot: None,
+            bluetooth_snapshot: None,
             servers: Vec::new(),
         })
     }

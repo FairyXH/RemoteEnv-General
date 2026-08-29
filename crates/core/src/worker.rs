@@ -154,6 +154,7 @@ impl ServerWorker {
             let result = self.run_connection(&mut stop).await;
             if let Err(error) = &result {
                 if !matches!(error, WorkerError::Stopped) {
+                    self.status.failed = self.status.failed.saturating_add(1);
                     self.status.last_error = Some(error.to_string());
                     let _ = self.status_tx.send(self.status.clone());
                 }

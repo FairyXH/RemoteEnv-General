@@ -3,7 +3,7 @@ use super::model::format_bluetooth_address;
 use remote_env_core::bluetooth::{
     BluetoothObservation, BluetoothTransport, RawAdvertisementSection,
 };
-use std::sync::mpsc::sync_channel;
+use std::sync::mpsc::channel;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use windows::Devices::Bluetooth::Advertisement::{
     BluetoothLEAdvertisementReceivedEventArgs, BluetoothLEAdvertisementWatcher,
@@ -113,7 +113,7 @@ pub struct NativeBleScanner {
 impl NativeBleScanner {
     pub fn new() -> Self {
         Self {
-            scan_window: Duration::from_secs(3),
+            scan_window: Duration::from_secs(10),
         }
     }
 }
@@ -124,11 +124,20 @@ impl Default for NativeBleScanner {
 }
 impl BleScanner for NativeBleScanner {
     fn scan(&self) -> Result<Vec<BluetoothObservation>, BluetoothError> {
-        let (tx, rx) = sync_channel(256);
+        unsafe {
+            windows::Win32::System::WinRT::RoInitialize(
+                windows::Win32::System::WinRT::RO_INIT_MULTITHREADED,
+            )
+            .map_err(|e| BluetoothError::Unavailable(format!("WinRT 初始化失败: {e}")))?;
+        }
+        let (tx, rx) = channel();
         let watcher = BluetoothLEAdvertisementWatcher::new()
             .map_err(|e| BluetoothError::Unavailable(e.to_string()))?;
         watcher
             .SetScanningMode(BluetoothLEScanningMode::Active)
+            .map_err(|e| BluetoothError::Unavailable(e.to_string()))?;
+        watcher
+            .SetAllowExtendedAdvertisements(true)
             .map_err(|e| BluetoothError::Unavailable(e.to_string()))?;
         let callback = TypedEventHandler::<
             BluetoothLEAdvertisementWatcher,
@@ -213,7 +222,7 @@ impl BleScanner for NativeBleScanner {
                     .unwrap_or_default()
                     .as_millis() as i64,
             };
-            let _ = tx.try_send(event);
+            let _ = tx.send(event);
             Ok(())
         });
         let token = watcher
@@ -223,6 +232,12 @@ impl BleScanner for NativeBleScanner {
             .Start()
             .map_err(|e| BluetoothError::Unavailable(e.to_string()))?;
         std::thread::sleep(self.scan_window);
+        let status = watcher
+            .Status()
+            .map_err(|e| BluetoothError::Unavailable(format!("BLE watcher status failed: {e}")))?;
+        if status == windows::Devices::Bluetooth::Advertisement::BluetoothLEAdvertisementWatcherStatus::Aborted {
+            return Err(BluetoothError::Unavailable("BLE watcher aborted before receiving advertisements".into()));
+        }
         let stop_result = watcher.Stop();
         let remove_result = watcher.RemoveReceived(token);
         stop_result

@@ -207,6 +207,55 @@ async fn wifi_event_reaches_upload_delivery_and_completes() {
 }
 
 #[tokio::test]
+async fn wifi_and_bluetooth_snapshots_upload_as_one_environment_envelope() {
+    let fixture = Fixture::start().await;
+    let dir = tempdir().unwrap();
+    let store = StateStore::open(dir.path().join("state.sqlite3")).unwrap();
+    let identity = DeviceIdentity {
+        device_id: "combined-runtime-device".into(),
+        device_name: "fixture".into(),
+        platform: "test".into(),
+        platform_version: "1".into(),
+        client_version: "1".into(),
+        hardware: None,
+    };
+    let mut run_config = config(identity, &fixture);
+    run_config.bluetooth_enabled = true;
+    run_config.scan_interval_seconds = 1;
+    let wifi_scan: CollectorScan = Arc::new(|| Ok(snapshot_event()));
+    let bluetooth_scan: CollectorScan = Arc::new(|| {
+        Ok(CollectorEvent {
+            data_type: "bluetooth".into(),
+            timestamp_ms: 2,
+            data: serde_json::json!({
+                "observations": [{"address": "AA:BB:CC:DD:EE:01", "transport": "ble"}],
+                "ble_available": true,
+                "classic_available": true,
+                "scan_duration_ms": 10
+            }),
+        })
+    });
+    let mut runtime = RuntimeSupervisor::start_with_collectors(
+        run_config.clone(),
+        store,
+        Some(wifi_scan),
+        Some(bluetooth_scan),
+    )
+    .unwrap();
+    runtime.set_collection_running(run_config, true).unwrap();
+    fixture
+        .wait_for(|fixture| fixture.received.lock().unwrap().len() >= 2)
+        .await;
+    let received = fixture.received.lock().unwrap().clone();
+    assert_eq!(received.len(), 2);
+    assert!(received.iter().all(|item| item["data_type"] == "environment"));
+    assert!(received.iter().all(|item| item["data"]["wifi"]["networks"].is_array()));
+    assert!(received.iter().all(|item| item["data"]["bluetooth"]["observations"].is_array()));
+    assert!(received[1]["sequence"].as_u64().unwrap() > received[0]["sequence"].as_u64().unwrap());
+    runtime.stop();
+}
+
+#[tokio::test]
 async fn wifi_delivery_reconnects_with_same_sequence_and_envelope() {
     let fixture = Fixture::start().await;
     let dir = tempdir().unwrap();
