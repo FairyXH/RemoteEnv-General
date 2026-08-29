@@ -10,6 +10,7 @@
 - Migrated persisted heartbeat configuration to 5 seconds after safe Token decryption and preserved per-profile Device ID behavior.
 - Updated local lifecycle fixtures for explicit collection activation and Unix-millisecond sequences; workspace tests and Release build pass.
 - Final packaged UI click/input E2E remains pending because pywinauto could not enumerate the Tauri WebView2 control tree.
+- Verified the user-provided WSS endpoint with auth, device_list, environment_data, and successful data_result ACK. Fixed legacy Core control-frame parsing and one-shot smoke return semantics, and added Windows single-instance protection.
 
 ### Phase 2-C Windows Desktop Production (partial)
 

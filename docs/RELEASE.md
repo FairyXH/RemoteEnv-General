@@ -38,6 +38,8 @@ Tauri 使用 Windows 应用数据目录保存 SQLite 状态、身份、服务器
 
 Release 不向 `Program Files`、项目源码目录或 exe 所在目录写入运行数据。令牌只保存在 Windows 当前用户可解密的 DPAPI 保护内容中和连接请求内；旧版本明文配置可兼容读取，并会在下次配置保存时转换为 DPAPI 保护格式。UI 默认隐藏令牌，状态快照、日志和错误提示不返回令牌。
 
+Windows Release 启动时使用命名单实例 Mutex `Global\\RemoteEnvCollector.SingleInstance`。重复启动不会创建第二个 Runtime 或争用同一 SQLite 状态，而是返回已在运行的启动错误。
+
 ## 运行行为
 
 主窗口关闭会隐藏到系统托盘，采集服务继续运行。托盘提供打开、启动采集服务、停止采集服务和退出。只有托盘的“退出”会停止采集服务、采集器、服务器 worker 并退出进程。
