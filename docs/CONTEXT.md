@@ -61,9 +61,32 @@ Status: Partial. All local code and test gates pass, and real Windows hardware s
 
 Status: Partial. Windows Release pipeline, unified version `0.2.0`, Chinese desktop UI, server profile CRUD, token masking, runtime status push, and close-to-tray lifecycle are implemented. Portable artifact generation is available through `scripts/build-release.ps1`. Clean-machine execution, installer execution, and final release smoke evidence remain pending.
 
-## Next step
+## Phase 2 Runtime/UI stability round
 
-First isolate the remaining Phase 1.75-C timeout (inspect worker status and fixture frame order rather than weakening tests). Then add regression coverage for Connect-only transitional status, five-second heartbeat freshness reset, immediate scan on Start, and Stop latency with a blocking scanner. Only after the workspace suite is green should the Tauri release build and real WebDriver/native desktop E2E be run. Current workspace has the two lifecycle commits `49865ec` and `98c63b3` plus the uncommitted context update; do not mark Phase 2-C complete.
+Status: **Partial**. This round fixed command delivery and lifecycle issues: Runtime commands now use an unbounded FIFO channel, Runtime and collector workers are joined on stop, desktop Stop removes and synchronously stops the Runtime, and cached events are flushed immediately when collection is enabled. Persistence/dispatcher errors are no longer silently discarded. Server workers use the configured heartbeat cadence, send JSON `{"type":"ping"}` independently, require real pong frames for heartbeat freshness, and force reconnect after 60 seconds without pong. Existing persisted heartbeat intervals are migrated to 5 seconds after decrypting profile tokens. The UI now renders heartbeat health as green <=5s, yellow >5s, and red >30s/>60s.
+
+Root causes found: Phase 2 fixtures did not issue the explicit collection activation command; old fixtures asserted sequence values `1/2` although production now allocates Unix-millisecond sequences; one recovery fixture notified server A instead of B; Runtime used bounded `try_send`; stop discarded join handles; and the UI/worker path initially treated authentication completion as heartbeat success. These were corrected and covered by local fixtures.
+
+## Verification
+
+- `cargo check --workspace`: PASS.
+- `cargo test --workspace`: PASS. Core/platform counts: 2 unit tests, 14 phase1 tests plus 1 explicitly ignored real-backend smoke, 8 phase175c tests, 2 phase2a tests, 3 phase2b tests, and 11 Windows platform tests. The ignored real-backend test was not executed because credentials were not present.
+- `npm run build` from `app/ui`: PASS; latest production bundle built successfully.
+- `cargo fmt --all -- --check`: FAIL due pre-existing formatting differences in `app/desktop/src-tauri/src/lib.rs` and `crates/core/src/state.rs`; no formatting-only sweep was applied.
+- Release build: PASS through direct `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/build-release.ps1`. Final artifacts are `Release/Windows/RemoteEnvCollector/RemoteEnvCollector.exe` (12,110,848 bytes) and `Release/Windows/RemoteEnvCollector-Setup.exe` (3,061,214 bytes), both version `0.2.0`. The current script intentionally does not produce the legacy root-level EXE.
+- Release process smoke: EXE was launched from the final nested Release path and WebView2 child processes were observed. Main-process/window enumeration through pywinauto UIA timed out; actual click/input/read/screenshot E2E was **NOT COMPLETED**. This is not treated as UI acceptance.
+- Real backend Wi-Fi/Bluetooth upload, ACK,断线恢复: **NOT EXECUTED**; no credentials were available and none were searched for or stored.
+
+## Commits in this round
+
+`9b5e530`, `acff961`, `6bef0ac`, `c26afd6`, `f2e8d2c`, `1cb6f99`.
+
+## Known issues / next step
+
+- Real packaged UI button E2E remains the blocking acceptance item. Install/enable a working Windows desktop automation path for Tauri WebView2 or run the required manual click matrix in an interactive desktop session.
+- The 60-second missing-pong regression intentionally takes about 60 seconds.
+- Working tree contains the existing `build-release-windows.bat` modification and generated Release binary state; do not revert unrelated changes.
+- Do not report Phase 2 Runtime/UI Stability as Complete until the Release UI is actually operated through Start, continuous scans/uploads, heartbeat display, disconnect/reconnect, and one-click Stop.
 
 ## Existing phase history
 

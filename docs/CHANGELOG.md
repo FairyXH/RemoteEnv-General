@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Phase 2 Runtime/UI stability repair (partial)
+
+- Fixed dropped lifecycle commands by using FIFO command delivery, joined Runtime/collector workers during stop, and made desktop Stop remove the complete Runtime and ServerWorkers.
+- Flushed events immediately when collection becomes active and surfaced persistence/dispatcher failures instead of silently discarding them.
+- Enforced independent 5-second JSON heartbeat scheduling, real-pong freshness, fixed 60-second no-pong reconnect threshold, and heartbeat UI severity bands.
+- Migrated persisted heartbeat configuration to 5 seconds after safe Token decryption and preserved per-profile Device ID behavior.
+- Updated local lifecycle fixtures for explicit collection activation and Unix-millisecond sequences; workspace tests and Release build pass.
+- Final packaged UI click/input E2E remains pending because pywinauto could not enumerate the Tauri WebView2 control tree.
+
 ### Phase 2-C Windows Desktop Production (partial)
 
 - Added unified `0.2.0` version declarations and a Windows Release script that builds UI/Rust artifacts into `Release/Windows/`.

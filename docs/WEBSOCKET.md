@@ -37,3 +37,5 @@ Each selected target has its own `ServerWorker`: independent WebSocket, heartbea
 Phase 2-B Bluetooth uses this same target-scoped behavior. A local Bluetooth fixture verifies A/B receive the same `bluetooth` envelope, A ACK does not complete B, and an unacknowledged target reconnects with the original sequence and payload.
 
 Local Phase 1.75-C integration tests exercise two independent listeners, same-envelope delivery, target-local ACK/reconnect recovery, profile replacement/removal, rate-limit classification, heartbeat/pong observation, missing-pong reconnect, and permanent auth failure.
+
+Phase 2 hardening fixes the heartbeat boundary: each Worker sends JSON `{"type":"ping"}` on its own 5-second timer; `last_heartbeat_ms` is updated only by a received pong, not by authentication or ping send. A Worker enters reconnect after 60 seconds without pong, with capped infinite backoff. Explicit Runtime stop joins the Worker and cancels reconnect waits, so stop cannot trigger a new reconnect. Local missing-pong coverage uses the real 60-second threshold.

@@ -22,3 +22,5 @@ Wi-Fi 和蓝牙卡片的“扫描”按钮执行一次原生 Windows 扫描；�
 
 
 Tauri desktop owns the tray boundary。关闭主窗口会隐藏到托盘，采集服务不会因此停止。托盘提供打开、启动采集服务、停止采集服务和退出；退出路径先停止采集服务、采集器和 ServerWorker，再结束进程。
+
+Phase 2 UI status rules: Start is the collection activation command and also creates missing selected ServerWorkers; Connect works independently and shows transitional backend status. Stop removes and joins the Runtime, so server heartbeat/reconnect and collector work end. Server cards show heartbeat health from the last successful pong: green at <=5 seconds, yellow above 5 seconds, red above 30 seconds and after the 60-second reconnect threshold. Release process smoke passed, but pywinauto WebView2 UIA enumeration timed out; real packaged click/input/screenshot acceptance remains pending.

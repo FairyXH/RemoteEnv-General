@@ -67,6 +67,8 @@ Windows now has one unified Bluetooth collector: `BluetoothCollector -> BLE scan
 
 `RuntimeSupervisor::start_with_collector` starts an optional platform scan callback on a dedicated worker runtime. Scans run through `spawn_blocking`, on the configured `scan_interval_seconds`, and stop checks prevent new work after shutdown. A bounded 120-second timeout converts a hung scan into a Wi-Fi Error state; the Runtime continues and later cycles can retry. Runtime config updates apply `wifi_enabled` and the interval without restarting the process.
 
+Phase 2 runtime stability details: Runtime commands are FIFO and cannot be dropped because a bounded command queue is full. Collection starts disabled, while selected ServerWorkers connect immediately; the explicit collection transition enables scanners and flushes any event already received during startup. Runtime stop joins the supervisor and collector worker threads. ServerWorkers remain independent, use JSON ping every configured 5 seconds, mark freshness only on real pong, and reconnect after 60 seconds without pong. The packaged UI consumes backend status snapshots and computes heartbeat presentation from the last successful pong.
+
 ## Phase 2-A verification
 
 `crates/core/tests/phase2a.rs` drives a complete local Wi-Fi envelope through Runtime sequence allocation, target delivery persistence, an actual local WebSocket session, exact `data_result`, and SQLite completion. Its recovery case forces an unacknowledged connection close and confirms the same `(device_id, data_type, sequence, data)` is observed again before ACK completion. The environment-only real backend Wi-Fi run remains pending because no Token was available in the current process environment.

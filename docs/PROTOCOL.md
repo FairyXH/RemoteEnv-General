@@ -42,3 +42,7 @@ Server docs call the success response a generic data result. Runtime code establ
 Real backend validation passed via the standalone Python client against the corrected endpoint. The client completed TLS WebSocket connection, collector authentication, successful `auth_result`, `device_list` reception, timestamped `heartbeat`/`pong`, one marked `environment_data` upload, and a matching successful `data_result` ACK. Credentials were provided only through process environment variables and were removed after testing.
 
 Phase 2-B local fixtures reuse this exact `environment_data`/`data_result` contract for Bluetooth and do not contact the real backend.
+
+## Phase 2 runtime evidence
+
+The local Phase 2-A/2-B/1.75-C fixtures now assert Unix-millisecond sequence values from the actual envelope, immutable payload/sequence during target-local recovery, explicit collection activation before scanning/upload, and independent A/B ACK completion. Runtime does not synthesize a heartbeat success at authentication time; only JSON `pong` or a WebSocket Pong control frame updates heartbeat freshness. Real RemoteEnvServer upload and ACK remain unexecuted in this round because no environment credentials were available.

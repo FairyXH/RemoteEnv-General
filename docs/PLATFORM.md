@@ -26,3 +26,5 @@ Shared UI -> Tauri -> Windows integration
 4. Keep Bluetooth worker and status under the existing RuntimeSupervisor; no Bluetooth upload subsystem exists.
 
 Platform crates may not expose native Windows/Android types across their collector result boundary.
+
+Windows Phase 2 local runtime integration is verified through the shared CollectorEvent and target delivery path. The native Wi-Fi and unified Bluetooth probes have passed on the validation host; final packaged desktop UI operation was not completed because the available WebView2 UIA automation path timed out.
