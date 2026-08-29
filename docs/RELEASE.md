@@ -40,6 +40,8 @@ Release 不向 `Program Files`、项目源码目录或 exe 所在目录写入运
 
 Windows Release 启动时使用命名单实例 Mutex `Global\\RemoteEnvCollector.SingleInstance`。重复启动不会创建第二个 Runtime 或争用同一 SQLite 状态，而是返回已在运行的启动错误。
 
+在最终 Release EXE 上启动两个实例的进程检查结果为 `process_count=1`；第二个启动未形成第二个 Collector 进程。
+
 ## 运行行为
 
 主窗口关闭会隐藏到系统托盘，采集服务继续运行。托盘提供打开、启动采集服务、停止采集服务和退出。只有托盘的“退出”会停止采集服务、采集器、服务器 worker 并退出进程。

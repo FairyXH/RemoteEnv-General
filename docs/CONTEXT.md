@@ -79,7 +79,7 @@ Root causes found: Phase 2 fixtures did not issue the explicit collection activa
 
 ## Commits in this round
 
-`9b5e530`, `acff961`, `6bef0ac`, `c26afd6`, `f2e8d2c`, `1cb6f99`, `58d0851`, `9234c10`.
+`9b5e530`, `acff961`, `6bef0ac`, `c26afd6`, `f2e8d2c`, `1cb6f99`, `58d0851`, `9234c10`, `5208bfa`, `92b24aa`, `b2ef4ac`.
 
 ## Known issues / next step
 
@@ -91,6 +91,8 @@ Root causes found: Phase 2 fixtures did not issue the explicit collection activa
 ## User-provided real backend verification
 
 2026-08-29: 使用用户提供的 WSS、`device_id=test` 和 Token 进行真实验证。独立 Python frame probe 完成 `auth_result.success=true`、收到 8 个设备的 `device_list`、发送一条 `environment_data(data_type=wifi)`，并收到匹配的 `data_result.success=true`。随后使用同一组仅进程环境变量和新 Unix 毫秒 sequence 运行 Core ignored smoke，测试通过。此前 `Transport(Utf8)` 根因是旧 `WebSocketManager` 在认证、ACK 和 heartbeat 阶段直接对控制帧调用 `to_text()`；另一个根因是 `run_once()` ACK 后不返回。两者已修复。凭据已从进程环境清除，未写入代码、文档或持久配置。
+
+后续用例 `cargo test --workspace` 通过，`npm run build` 通过，最新 Release 也通过。旧 Core `WebSocketManager` 的真实 smoke 现在在成功 ACK 后正常返回；服务端真实证据为 `auth_result=True`、`device_list=8`、`data_result=True`。
 
 本机 AppData SQLite `integrity_check` 通过，配置 URL/device ID 正确，Token 为 DPAPI 保护内容。故障期间曾同时运行 4 个 Collector EXE，日志显示重复连接请求；已加入 Windows named Mutex `Global\\RemoteEnvCollector.SingleInstance`，阻止多实例争用同一 AppData 状态。
 

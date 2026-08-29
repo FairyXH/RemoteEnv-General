@@ -46,3 +46,5 @@ Phase 2-B local fixtures reuse this exact `environment_data`/`data_result` contr
 ## Phase 2 runtime evidence
 
 The local Phase 2-A/2-B/1.75-C fixtures now assert Unix-millisecond sequence values from the actual envelope, immutable payload/sequence during target-local recovery, explicit collection activation before scanning/upload, and independent A/B ACK completion. Runtime does not synthesize a heartbeat success at authentication time; only JSON `pong` or a WebSocket Pong control frame updates heartbeat freshness. The user-provided real endpoint was verified separately and the Core ignored smoke passed with auth, device_list, environment_data, and matching data_result ACK.
+
+The Core smoke uses a fresh epoch-millisecond sequence and completed successfully against the user-provided endpoint. The one-shot smoke API returns after the matching ACK; the production `ServerWorker` remains long-lived.
