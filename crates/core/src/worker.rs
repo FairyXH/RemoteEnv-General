@@ -71,7 +71,7 @@ impl WorkerHandle {
         profile: ServerProfile,
         dispatcher: UploadDispatcher,
         identity: DeviceIdentity,
-        _heartbeat_interval: Duration,
+        heartbeat_interval: Duration,
     ) -> Self {
         let profile_id = profile.id.clone();
         let (status_tx, status) = watch::channel(ServerWorkerStatus::new(profile_id.clone()));
@@ -82,7 +82,7 @@ impl WorkerHandle {
                 dispatcher,
                 identity,
                 status_tx,
-                Duration::from_secs(5),
+                heartbeat_interval,
             )
             .run(stop_rx),
         );
@@ -130,7 +130,7 @@ impl ServerWorker {
         dispatcher: UploadDispatcher,
         identity: DeviceIdentity,
         status_tx: watch::Sender<ServerWorkerStatus>,
-        _heartbeat_interval: Duration,
+        heartbeat_interval: Duration,
     ) -> Self {
         let status = ServerWorkerStatus::new(profile.id.clone());
         Self {
@@ -139,10 +139,10 @@ impl ServerWorker {
             identity,
             status_tx,
             status,
-            heartbeat_interval: Duration::from_secs(5),
+            heartbeat_interval,
             heartbeat_monitor: HeartbeatMonitor::new(
-                Duration::from_secs(5),
-                Duration::from_secs(10),
+                heartbeat_interval,
+                heartbeat_interval.saturating_mul(3),
             ),
         }
     }
