@@ -79,7 +79,7 @@ Root causes found: Phase 2 fixtures did not issue the explicit collection activa
 
 ## Commits in this round
 
-`9b5e530`, `acff961`, `6bef0ac`, `c26afd6`, `f2e8d2c`, `1cb6f99`, `58d0851`, `9234c10`, `5208bfa`, `92b24aa`, `b2ef4ac`.
+`9b5e530`, `acff961`, `6bef0ac`, `c26afd6`, `f2e8d2c`, `1cb6f99`, `58d0851`, `9234c10`, `5208bfa`, `92b24aa`, `b2ef4ac`, `d629021`.
 
 ## Known issues / next step
 
@@ -87,6 +87,8 @@ Root causes found: Phase 2 fixtures did not issue the explicit collection activa
 - The 60-second missing-pong regression intentionally takes about 60 seconds.
 - Working tree contains the existing `build-release-windows.bat` modification and generated Release binary state; do not revert unrelated changes.
 - Do not report Phase 2 Runtime/UI Stability as Complete until the Release UI is actually operated through Start, continuous scans/uploads, heartbeat display, disconnect/reconnect, and one-click Stop.
+
+2026-08-29 follow-up: AppData SQLite remained valid and the user-provided real backend continued to pass auth/device_list/environment_data/data_result. A live inspection found multiple simultaneous Release EXE processes during the reported UI failure; the final Release now enforces one process using a Windows named Mutex. UI initialization and runtime-option errors now include the exact failing command (`get_runtime_status` versus `get_desktop_config`) and are logged by the Tauri backend. Latest `cargo check --workspace` and `npm run build` pass, and launching the final EXE twice leaves one process. Final packaged UI click E2E remains unverified because WebView2 UIA automation is unavailable.
 
 ## User-provided real backend verification
 
