@@ -144,7 +144,15 @@ impl UploadDispatcher {
         }
         let mut created = 0;
         for target in targets {
-            if self.store.enqueue_target(&target.id, envelope)? {
+            // Delivery identity follows the target token; event sequence remains global.
+            let target_envelope = if envelope.device_id == target.device_id {
+                envelope.clone()
+            } else {
+                let mut target_envelope = envelope.clone();
+                target_envelope.device_id = target.device_id.clone();
+                target_envelope
+            };
+            if self.store.enqueue_target(&target.id, &target_envelope)? {
                 created += 1;
             }
         }
@@ -184,16 +192,30 @@ impl UploadDispatcher {
         Ok(self.store.cancel_target_delivery(server_id, id)?)
     }
 
-    pub fn cancel_target_except_device(&self, server_id: &str, device_id: &str) -> Result<(), DispatcherError> {
-        Ok(self.store.cancel_target_except_device(server_id, device_id)?)
+    pub fn cancel_target_except_device(
+        &self,
+        server_id: &str,
+        device_id: &str,
+    ) -> Result<(), DispatcherError> {
+        Ok(self
+            .store
+            .cancel_target_except_device(server_id, device_id)?)
     }
 
     pub fn unblock_target(&self, target_id: &str) -> Result<(), DispatcherError> {
         Ok(self.store.unblock_target(target_id)?)
     }
 
-    pub fn rebase_target_sequences(&self, target_id: &str, device_id: &str, data_type: &str, minimum: u64) -> Result<(), DispatcherError> {
-        Ok(self.store.rebase_target_sequences(target_id, device_id, data_type, minimum)?)
+    pub fn rebase_target_sequences(
+        &self,
+        target_id: &str,
+        device_id: &str,
+        data_type: &str,
+        minimum: u64,
+    ) -> Result<(), DispatcherError> {
+        Ok(self
+            .store
+            .rebase_target_sequences(target_id, device_id, data_type, minimum)?)
     }
 
     pub fn recover(&self, server_id: &str) -> Result<(), DispatcherError> {

@@ -400,12 +400,20 @@ fn disconnect_server_profile(
     state: State<'_, AppState>,
 ) -> Result<RuntimeStatus, String> {
     let (store, mut config) = load_config(&state.state_path)?;
-    let Some(profile) = config.server_profiles.iter_mut().find(|profile| profile.id == id) else {
+    let Some(profile) = config
+        .server_profiles
+        .iter_mut()
+        .find(|profile| profile.id == id)
+    else {
         return Err("未找到服务器配置。".into());
     };
     profile.enabled = false;
     if config.active_server_id.as_deref() == Some(id.as_str()) {
-        config.active_server_id = config.server_profiles.iter().find(|item| item.id != id && item.enabled).map(|item| item.id.clone());
+        config.active_server_id = config
+            .server_profiles
+            .iter()
+            .find(|item| item.id != id && item.enabled)
+            .map(|item| item.id.clone());
     }
     update_runtime(&state, &config)?;
     save_config(&store, &config)?;
@@ -422,7 +430,11 @@ fn set_server_enabled(
     state: State<'_, AppState>,
 ) -> Result<RuntimeStatus, String> {
     let (store, mut config) = load_config(&state.state_path)?;
-    if let Some(profile) = config.server_profiles.iter_mut().find(|profile| profile.id == id) {
+    if let Some(profile) = config
+        .server_profiles
+        .iter_mut()
+        .find(|profile| profile.id == id)
+    {
         profile.enabled = enabled;
     } else {
         return Err("未找到服务器配置。".into());
@@ -469,7 +481,11 @@ fn set_runtime_options(
     upload_interval_seconds: u64,
     state: State<'_, AppState>,
 ) -> Result<DesktopConfigView, String> {
-    if scan_interval_seconds == 0 || scan_interval_seconds > 3600 || upload_interval_seconds == 0 || upload_interval_seconds > 3600 {
+    if scan_interval_seconds == 0
+        || scan_interval_seconds > 3600
+        || upload_interval_seconds == 0
+        || upload_interval_seconds > 3600
+    {
         return Err("扫描间隔和上传间隔必须在 1 到 3600 秒之间。".into());
     }
     let (store, mut config) = load_config(&state.state_path)?;
@@ -515,7 +531,11 @@ fn connect_server_profile(
     }
     config.server_mode = ServerMode::Single;
     config.active_server_id = Some(id.clone());
-    if let Some(profile) = config.server_profiles.iter_mut().find(|profile| profile.id == id) {
+    if let Some(profile) = config
+        .server_profiles
+        .iter_mut()
+        .find(|profile| profile.id == id)
+    {
         profile.enabled = true;
     }
     config.validate().map_err(user_error)?;
@@ -525,11 +545,19 @@ fn connect_server_profile(
         .lock()
         .map_err(|_| "应用状态不可用。".to_string())?;
     if let Some(runtime) = guard.as_ref() {
-        runtime.update_config(config).map_err(user_error)?;
+        let mut collection_config = config.clone();
+        collection_config.wifi_enabled = false;
+        collection_config.bluetooth_enabled = false;
+        runtime
+            .update_config(collection_config)
+            .map_err(user_error)?;
     } else {
+        let mut collection_config = config.clone();
+        collection_config.wifi_enabled = false;
+        collection_config.bluetooth_enabled = false;
         *guard = Some(
             RuntimeSupervisor::start_with_collectors(
-                config,
+                collection_config,
                 store,
                 Some(std::sync::Arc::new(|| {
                     NativeWlanProvider::new()
@@ -694,7 +722,7 @@ fn start_runtime(
     if guard.is_none() {
         *guard = Some(
             RuntimeSupervisor::start_with_collectors(
-                config,
+                config.clone(),
                 store,
                 Some(std::sync::Arc::new(|| {
                     NativeWlanProvider::new()

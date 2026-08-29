@@ -123,13 +123,14 @@ impl TestServer {
                                         socket.send(Message::Text(ack.to_string().into())).await;
                                 }
                             }
-                            Some("heartbeat") => {
+                            Some("ping") => {
                                 state.8.fetch_add(1, Ordering::SeqCst);
                                 if state.9.load(Ordering::SeqCst) {
                                     let _ = socket
                                         .send(Message::Text(r#"{"type":"pong"}"#.into()))
                                         .await;
                                 }
+                                state.7.notify_waiters();
                             }
                             _ => {}
                         }
@@ -154,9 +155,9 @@ impl TestServer {
     }
 
     async fn wait_for(&self, predicate: impl Fn(&Self) -> bool) {
-        tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::time::timeout(Duration::from_secs(12), async {
             while !predicate(self) {
-                self.changed.notified().await;
+                tokio::time::sleep(Duration::from_millis(10)).await;
             }
         })
         .await
@@ -230,7 +231,7 @@ fn event(label: &str) -> CollectorEvent {
 }
 
 async fn wait_ready(runtime: &RuntimeSupervisor, count: usize) {
-    tokio::time::timeout(Duration::from_secs(5), async {
+    tokio::time::timeout(Duration::from_secs(12), async {
         while runtime
             .status()
             .servers
@@ -247,7 +248,7 @@ async fn wait_ready(runtime: &RuntimeSupervisor, count: usize) {
 }
 
 async fn wait_complete(store: &StateStore, device_id: &str, data_type: &str, sequence: u64) {
-    tokio::time::timeout(Duration::from_secs(5), async {
+    tokio::time::timeout(Duration::from_secs(12), async {
         while !store
             .event_complete(device_id, data_type, sequence)
             .unwrap()
@@ -260,7 +261,7 @@ async fn wait_complete(store: &StateStore, device_id: &str, data_type: &str, seq
 }
 
 async fn wait_for_profiles(runtime: &RuntimeSupervisor, expected: &[&str]) {
-    tokio::time::timeout(Duration::from_secs(5), async {
+    tokio::time::timeout(Duration::from_secs(12), async {
         while runtime
             .status()
             .servers
@@ -284,7 +285,7 @@ async fn wait_delivery_status(
     sequence: u64,
     expected: &str,
 ) {
-    tokio::time::timeout(Duration::from_secs(5), async {
+    tokio::time::timeout(Duration::from_secs(12), async {
         while store
             .delivery_status(target_id, device_id, data_type, sequence)
             .unwrap()

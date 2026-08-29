@@ -50,7 +50,7 @@ fn identity_is_created_once_and_config_is_round_trippable() {
         bluetooth_enabled: false,
         scan_interval_seconds: 30,
         upload_interval_seconds: 30,
-        heartbeat_interval_seconds: 15,
+        heartbeat_interval_seconds: 5,
         max_uploads_per_minute: 60,
         max_queue_size: 100,
         log_level: LoggingLevel::Info,
@@ -149,10 +149,10 @@ fn transport_classifies_ack_errors_and_heartbeat_contract() {
         ServerEvent::RetryableError
     );
     let monitor = HeartbeatMonitor::new(
+        std::time::Duration::from_secs(5),
         std::time::Duration::from_secs(15),
-        std::time::Duration::from_secs(45),
     );
-    assert_eq!(monitor.interval(), std::time::Duration::from_secs(15));
+    assert_eq!(monitor.interval(), std::time::Duration::from_secs(5));
     assert!(!monitor.is_timed_out());
 }
 

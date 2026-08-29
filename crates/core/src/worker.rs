@@ -9,7 +9,7 @@ use serde::Serialize;
 use serde_json::Value;
 use std::time::Duration;
 use tokio::sync::{oneshot, watch};
-use tokio_tungstenite::{connect_async_tls_with_config, tungstenite::Message, Connector};
+use tokio_tungstenite::{Connector, connect_async_tls_with_config, tungstenite::Message};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ServerWorkerStatus {
@@ -71,7 +71,7 @@ impl WorkerHandle {
         profile: ServerProfile,
         dispatcher: UploadDispatcher,
         identity: DeviceIdentity,
-        heartbeat_interval: Duration,
+        _heartbeat_interval: Duration,
     ) -> Self {
         let profile_id = profile.id.clone();
         let (status_tx, status) = watch::channel(ServerWorkerStatus::new(profile_id.clone()));
@@ -82,7 +82,7 @@ impl WorkerHandle {
                 dispatcher,
                 identity,
                 status_tx,
-                heartbeat_interval,
+                Duration::from_secs(5),
             )
             .run(stop_rx),
         );
@@ -130,7 +130,7 @@ impl ServerWorker {
         dispatcher: UploadDispatcher,
         identity: DeviceIdentity,
         status_tx: watch::Sender<ServerWorkerStatus>,
-        heartbeat_interval: Duration,
+        _heartbeat_interval: Duration,
     ) -> Self {
         let status = ServerWorkerStatus::new(profile.id.clone());
         Self {
@@ -139,16 +139,16 @@ impl ServerWorker {
             identity,
             status_tx,
             status,
-            heartbeat_interval,
+            heartbeat_interval: Duration::from_secs(5),
             heartbeat_monitor: HeartbeatMonitor::new(
-                heartbeat_interval,
-                heartbeat_interval.saturating_mul(3),
+                Duration::from_secs(5),
+                Duration::from_secs(10),
             ),
         }
     }
 
     async fn run(mut self, mut stop: oneshot::Receiver<()>) {
-        let mut backoff = Backoff::new(1, 30);
+        let mut backoff = Backoff::new(1, 60);
         loop {
             self.publish(ConnectionState::Connecting);
             let result = self.run_connection(&mut stop).await;
@@ -225,14 +225,20 @@ impl ServerWorker {
             result = next_json(&mut socket) => result?,
         };
         if auth_result["type"] != "auth_result" || auth_result["success"] != true {
-            return Err(WorkerError::Blocked(format!("服务器认证拒绝: {}", auth_result)));
+            return Err(WorkerError::Blocked(format!(
+                "服务器认证拒绝: {}",
+                auth_result
+            )));
         }
         let device_list = tokio::select! {
             _ = &mut *stop => return Err(WorkerError::Stopped),
             result = next_json(&mut socket) => result?,
         };
         if device_list["type"] != "device_list" {
-            return Err(WorkerError::Blocked(format!("服务器协议拒绝: 认证后未收到 device_list，实际响应: {}", device_list)));
+            return Err(WorkerError::Blocked(format!(
+                "服务器协议拒绝: 认证后未收到 device_list，实际响应: {}",
+                device_list
+            )));
         }
         self.publish(ConnectionState::Ready);
         self.heartbeat_monitor.mark_pong();
@@ -244,7 +250,10 @@ impl ServerWorker {
                 if let Some(item) = self.dispatcher.claim_next(&self.profile.id)? {
                     if item.1.device_id != self.identity.device_id {
                         self.dispatcher.cancel_delivery(&self.profile.id, item.0)?;
-                        self.status.last_error = Some(format!("本地队列存在其他设备数据，已跳过: auth_device_id={}, envelope_device_id={}, profile_id={}", self.identity.device_id, item.1.device_id, self.profile.id));
+                        self.status.last_error = Some(format!(
+                            "本地队列存在其他设备数据，已跳过: auth_device_id={}, envelope_device_id={}, profile_id={}",
+                            self.identity.device_id, item.1.device_id, self.profile.id
+                        ));
                         self.refresh_counts();
                         continue;
                     }

@@ -84,7 +84,7 @@ impl Default for ClientConfig {
             bluetooth_enabled: false,
             scan_interval_seconds: 30,
             upload_interval_seconds: 30,
-            heartbeat_interval_seconds: 15,
+            heartbeat_interval_seconds: 5,
             max_uploads_per_minute: 60,
             max_queue_size: 1000,
             log_level: LoggingLevel::Info,
@@ -122,16 +122,11 @@ impl ClientConfig {
             return Err("active_server_id is required in Single server mode".into());
         }
         let selected = self.selected_servers();
-        if let Some(first) = selected.first() {
-            if first.device_id.trim().is_empty() {
-                return Err("selected server device_id is required".into());
-            }
-            if selected
-                .iter()
-                .any(|profile| profile.device_id != first.device_id)
-            {
-                return Err("selected server profiles must use the same device_id".into());
-            }
+        if selected
+            .iter()
+            .any(|profile| profile.device_id.trim().is_empty())
+        {
+            return Err("selected server device_id is required".into());
         }
         if let Some(active_id) = self.active_server_id.as_deref()
             && !self

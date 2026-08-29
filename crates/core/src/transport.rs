@@ -1,5 +1,5 @@
 use crate::config::DeviceIdentity;
-use crate::protocol::{Ack, AuthFrame, EnvironmentEnvelope, HeartbeatFrame};
+use crate::protocol::{Ack, AuthFrame, EnvironmentEnvelope};
 use crate::queue::{QueueError, QueuedEnvelope, UploadQueue};
 use crate::state::StateError;
 use futures_util::{SinkExt, StreamExt};
@@ -25,6 +25,8 @@ pub enum WebSocketError {
     SequenceRejected(String),
 }
 
+const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
+
 pub struct WebSocketManager {
     pub state: ConnectionState,
     pub backoff: Backoff,
@@ -32,13 +34,13 @@ pub struct WebSocketManager {
 }
 
 impl WebSocketManager {
-    pub fn new(heartbeat_interval: Duration) -> Self {
+    pub fn new(_heartbeat_interval: Duration) -> Self {
         Self {
             state: ConnectionState::Disconnected,
-            backoff: Backoff::new(1, 30),
+            backoff: Backoff::new(1, 60),
             heartbeat: HeartbeatMonitor::new(
-                heartbeat_interval,
-                heartbeat_interval.saturating_mul(3),
+                HEARTBEAT_INTERVAL,
+                HEARTBEAT_INTERVAL.saturating_mul(3),
             ),
         }
     }
@@ -162,8 +164,8 @@ impl WebSocketManager {
 
             tokio::select! {
                 _ = heartbeat_tick.tick() => {
-                    let heartbeat = HeartbeatFrame { r#type: "heartbeat".into(), timestamp: now_ms() };
-                    socket.send(Message::Text(serde_json::to_string(&heartbeat)?.into())).await?;
+                    let heartbeat = r#"{"type":"ping"}"#;
+                    socket.send(Message::Text(heartbeat.into())).await?;
                     let pong = tokio::time::timeout(self.heartbeat.interval(), socket.next()).await
                         .map_err(|_| WebSocketError::Authentication("heartbeat timeout".into()))?
                         .ok_or_else(|| WebSocketError::Authentication("connection closed during heartbeat".into()))??;
@@ -190,6 +192,7 @@ impl WebSocketManager {
     }
 }
 
+#[allow(dead_code)]
 fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -237,9 +240,13 @@ impl Backoff {
         Self {
             current: base,
             base,
-            max,
+            max: max.min(60),
         }
     }
+    pub fn retry_delay(attempt: u32) -> Duration {
+        Duration::from_secs((1u64 << attempt.min(6)).min(60))
+    }
+
     pub fn next_delay_seconds(&mut self) -> u64 {
         let out = self.current;
         self.current = self.current.saturating_mul(2).min(self.max);
