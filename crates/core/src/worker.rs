@@ -243,6 +243,8 @@ impl ServerWorker {
         self.publish(ConnectionState::Ready);
         let mut heartbeat = tokio::time::interval(self.heartbeat_interval);
         heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut delivery_poll = tokio::time::interval(Duration::from_millis(50));
+        delivery_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let mut in_flight = None;
         loop {
             if in_flight.is_none() {
@@ -270,6 +272,7 @@ impl ServerWorker {
             }
             tokio::select! {
                 _ = &mut *stop => return Err(WorkerError::Stopped),
+                _ = delivery_poll.tick(), if in_flight.is_none() => {}
                 _ = heartbeat.tick() => {
                     if self.heartbeat_monitor.is_timed_out() {
                         return Err(WorkerError::Transport);

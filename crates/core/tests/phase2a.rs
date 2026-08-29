@@ -121,6 +121,16 @@ fn snapshot_event() -> CollectorEvent {
     }
 }
 
+async fn wait_collection_running(runtime: &RuntimeSupervisor) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !runtime.status().collection_running {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
 fn config(identity: DeviceIdentity, fixture: &Fixture) -> ClientConfig {
     let mut config = ClientConfig::default();
     config.identity = identity;
@@ -178,6 +188,7 @@ async fn wifi_event_reaches_upload_delivery_and_completes() {
     )
     .unwrap();
     runtime.set_collection_running(run_config, true).unwrap();
+    wait_collection_running(&runtime).await;
     fixture
         .wait_for(|fixture| !fixture.received.lock().unwrap().is_empty())
         .await;
