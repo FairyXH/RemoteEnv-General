@@ -104,8 +104,8 @@ impl PeriodicCollectorHandle {
                                 enabled = next;
                                 ticker = tokio::time::interval(next_interval);
                                 ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-                                ticker.tick().await;
                                 if !enabled {
+                                    ticker.tick().await;
                                     let _ = statuses.send(WiFiRuntimeStatus { enabled: false, state: WiFiRuntimeState::Disabled, total_scans: total, successful_scans: successful, failed_scans: failed, ..Default::default() }).await;
                                 }
                             }
@@ -175,7 +175,7 @@ impl BluetoothWorkerHandle {
                                 Err(error) => { failed += 1; let _ = statuses.send(BluetoothRuntimeStatus { enabled, state: WiFiRuntimeState::Error, last_error: Some(error.to_string()), total_scans: total, successful_scans: successful, failed_scans: failed, ..Default::default() }).await; }
                             }
                         }
-                        Some(CollectorCommand::Configure { enabled: next, interval: next_interval }) = command_rx.recv() => { enabled = next; ticker = tokio::time::interval(next_interval); ticker.tick().await; if !enabled { let _ = statuses.send(BluetoothRuntimeStatus { state: WiFiRuntimeState::Disabled, ..Default::default() }).await; } }
+                        Some(CollectorCommand::Configure { enabled: next, interval: next_interval }) = command_rx.recv() => { enabled = next; ticker = tokio::time::interval(next_interval); if !enabled { ticker.tick().await; let _ = statuses.send(BluetoothRuntimeStatus { state: WiFiRuntimeState::Disabled, ..Default::default() }).await; } }
                         _ = tokio::time::sleep(Duration::from_millis(20)) => if stop_flag.load(Ordering::Acquire) { break; },
                     }
                 }
@@ -391,7 +391,7 @@ impl RuntimeSupervisor {
                     let mut current_config = config;
                     let mut collection_running = false;
                     let mut status_tick = tokio::time::interval(Duration::from_millis(20));
-                    let mut upload_tick = tokio::time::interval(Duration::from_secs(current_config.upload_interval_seconds));
+                    let mut upload_tick = tokio::time::interval(Duration::from_millis(100));
                     upload_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                     let mut latest_events: HashMap<String, CollectorEvent> = HashMap::new();
                     let worker = scan.map(|scan| PeriodicCollectorHandle::start(scan, false, Duration::from_secs(1), events_for_worker.clone(), wifi_status_tx));
@@ -404,13 +404,9 @@ impl RuntimeSupervisor {
                             Some(event) = event_rx.recv() => {
                                 latest_events.insert(event.data_type.clone(), event);
                             }
-                            _ = upload_tick.tick() => {
+                            _ = upload_tick.tick(), if collection_running => {
                                 for (_, event) in latest_events.drain() {
-                                    let device_id = current_config
-                                        .selected_servers()
-                                        .first()
-                                        .map(|profile| profile.device_id.clone())
-                                        .unwrap_or_else(|| current_config.identity.device_id.clone());
+                                    let device_id = current_config.identity.device_id.clone();
                                     let timestamp = now_ms();
                                     let sequence = store.next_timestamp_sequence(&device_id, &event.data_type).unwrap_or(0);
                                     let envelope = EnvironmentEnvelope {
@@ -434,7 +430,7 @@ impl RuntimeSupervisor {
                                 if let Some(worker) = worker.as_ref() { worker.configure(updated_config.wifi_enabled && next_running, Duration::from_secs(1)); }
                                 if let Some(worker) = bluetooth_worker.as_ref() { worker.configure(updated_config.bluetooth_enabled && next_running, Duration::from_secs(1)); }
                                 collection_running = next_running;
-                                upload_tick = tokio::time::interval(Duration::from_secs(updated_config.upload_interval_seconds));
+                                upload_tick = tokio::time::interval(Duration::from_millis(updated_config.upload_interval_seconds.saturating_mul(1000).max(100)));
                                 upload_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                                 current_config = updated_config;
                             }

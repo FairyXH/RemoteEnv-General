@@ -279,7 +279,21 @@ impl ServerWorker {
                 }
                 message = socket.next() => {
                     let Some(message) = message else { return Err(WorkerError::Transport); };
-                    let value = serde_json::from_str::<Value>(message.map_err(|_| WorkerError::Transport)?.to_text().map_err(|_| WorkerError::Protocol)?).map_err(|_| WorkerError::Protocol)?;
+                    let message = message.map_err(|_| WorkerError::Transport)?;
+                    let value = match message {
+                        Message::Text(text) => serde_json::from_str::<Value>(&text).map_err(|_| WorkerError::Protocol)?,
+                        Message::Pong(_) => {
+                            self.heartbeat_monitor.mark_pong();
+                            self.mark_heartbeat();
+                            continue;
+                        }
+                        Message::Ping(payload) => {
+                            socket.send(Message::Pong(payload)).await.map_err(|_| WorkerError::Transport)?;
+                            continue;
+                        }
+                        Message::Close(_) => return Err(WorkerError::Transport),
+                        Message::Binary(_) | Message::Frame(_) => continue,
+                    };
                     match classify_server_message(value["type"].as_str().unwrap_or_default(), value["code"].as_str()) {
                         ServerEvent::Pong => { self.heartbeat_monitor.mark_pong(); self.mark_heartbeat(); }
                         ServerEvent::Invalid if value["type"] == "ping" => {
@@ -311,7 +325,9 @@ impl ServerWorker {
                                 self.refresh_counts();
                             }
                         }
-                        ServerEvent::Invalid => return Err(WorkerError::Blocked(format!("服务器返回未知协议消息: {}", value))),
+                        // Unknown application frames are transport errors, not permanent auth failures.
+                        // Reconnect so one malformed/unsupported frame cannot stop collection forever.
+                        ServerEvent::Invalid => return Err(WorkerError::Transport),
                         ServerEvent::FatalError => {
                             if let Some((id, _)) = in_flight.take() { self.dispatcher.block(&self.profile.id, id)?; }
                             return Err(WorkerError::Blocked(format!("服务器拒绝连接/上传: {}", value)));
