@@ -1,7 +1,7 @@
 @echo off
 setlocal EnableExtensions
 cd /d "%~dp0"
-
+taskkill /f /im RemoteEnvCollector.exe /t
 echo [1/4] Checking build tools...
 where cargo >nul 2>nul
 if errorlevel 1 goto missing_cargo
