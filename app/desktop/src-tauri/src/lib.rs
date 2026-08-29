@@ -582,6 +582,24 @@ fn connect_server_profile(
     let status = guard
         .as_ref()
         .map(RuntimeSupervisor::status)
+        .map(|mut status| {
+            if !status.servers.iter().any(|server| server.profile_id == id) {
+                status.servers.push(remote_env_core::worker::ServerWorkerStatus {
+                    profile_id: id.clone(),
+                    connection: remote_env_core::transport::ConnectionState::Connecting,
+                    heartbeat_alive: false,
+                    last_heartbeat_ms: None,
+                    last_error: None,
+                    pending: 0,
+                    in_flight: 0,
+                    blocked: 0,
+                    uploaded: 0,
+                    failed: 0,
+                });
+            }
+            status.connection = remote_env_core::transport::ConnectionState::Connecting;
+            status
+        })
         .unwrap_or_default();
     let _ = app.emit(STATUS_EVENT, &status);
     info("服务器连接命令已提交");
@@ -752,8 +770,13 @@ fn start_runtime(
     let status = guard
         .as_ref()
         .map(RuntimeSupervisor::status)
+        .map(|mut status| {
+            status.collection_running = true;
+            status
+        })
         .unwrap_or_default();
     let _ = app.emit(STATUS_EVENT, &status);
+    info("采集服务启动命令已提交，扫描器已请求立即运行");
     Ok(status)
 }
 
