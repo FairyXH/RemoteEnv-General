@@ -545,19 +545,11 @@ fn connect_server_profile(
         .lock()
         .map_err(|_| "应用状态不可用。".to_string())?;
     if let Some(runtime) = guard.as_ref() {
-        let mut collection_config = config.clone();
-        collection_config.wifi_enabled = false;
-        collection_config.bluetooth_enabled = false;
-        runtime
-            .update_config(collection_config)
-            .map_err(user_error)?;
+        runtime.update_config(config.clone()).map_err(user_error)?;
     } else {
-        let mut collection_config = config.clone();
-        collection_config.wifi_enabled = false;
-        collection_config.bluetooth_enabled = false;
         *guard = Some(
             RuntimeSupervisor::start_with_collectors(
-                collection_config,
+                config.clone(),
                 store,
                 Some(std::sync::Arc::new(|| {
                     NativeWlanProvider::new()
@@ -752,6 +744,11 @@ fn start_runtime(
             .map_err(user_error)?,
         );
     }
+    if let Some(runtime) = guard.as_ref() {
+        runtime
+            .set_collection_running(config.clone(), true)
+            .map_err(user_error)?;
+    }
     let status = guard
         .as_ref()
         .map(RuntimeSupervisor::status)
@@ -765,14 +762,17 @@ fn stop_runtime(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<RuntimeStatus, String> {
-    let mut guard = state
+    let guard = state
         .runtime
         .lock()
         .map_err(|_| "应用状态不可用。".to_string())?;
-    if let Some(mut runtime) = guard.take() {
-        runtime.stop();
+    if let Some(runtime) = guard.as_ref() {
+        let config = load_config(&state.state_path)?.1;
+        runtime
+            .set_collection_running(config, false)
+            .map_err(user_error)?;
     }
-    let status = RuntimeStatus::default();
+    let status = current_status(&state)?;
     let _ = app.emit(STATUS_EVENT, &status);
     Ok(status)
 }

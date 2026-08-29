@@ -7,11 +7,11 @@ use crate::state::{StateError, StateStore};
 use crate::transport::ConnectionState;
 use crate::worker::ServerWorkerStatus;
 use serde::Serialize;
+use std::collections::HashMap;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
-use std::collections::HashMap;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -33,6 +33,11 @@ struct CollectorControl {
 
 enum CollectorCommand {
     Configure { enabled: bool, interval: Duration },
+}
+
+enum RuntimeCommand {
+    Config(ClientConfig),
+    Collection { config: ClientConfig, running: bool },
 }
 
 struct PeriodicCollectorHandle {
@@ -286,6 +291,7 @@ impl Default for BluetoothRuntimeStatus {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct RuntimeStatus {
     pub connection: ConnectionState,
+    pub collection_running: bool,
     pub wifi: CollectorStatus,
     pub wifi_runtime: WiFiRuntimeStatus,
     pub bluetooth: CollectorStatus,
@@ -304,6 +310,7 @@ impl Default for RuntimeStatus {
     fn default() -> Self {
         Self {
             connection: ConnectionState::Disconnected,
+            collection_running: false,
             wifi: CollectorStatus::NotImplemented,
             wifi_runtime: WiFiRuntimeStatus::default(),
             bluetooth: CollectorStatus::NotImplemented,
@@ -330,7 +337,7 @@ pub struct Runtime {
 
 pub struct RuntimeSupervisor {
     events: mpsc::Sender<CollectorEvent>,
-    config_updates: mpsc::Sender<ClientConfig>,
+    commands: mpsc::Sender<RuntimeCommand>,
     status: watch::Receiver<RuntimeStatus>,
     stop: Option<tokio::sync::oneshot::Sender<()>>,
     thread: Option<JoinHandle<()>>,
@@ -361,7 +368,7 @@ impl RuntimeSupervisor {
             return Err(RuntimeError::Dispatcher(DispatcherError::NoTargets));
         }
         let (events, mut event_rx) = mpsc::channel::<CollectorEvent>(128);
-        let (config_updates, mut config_rx) = mpsc::channel::<ClientConfig>(16);
+        let (commands, mut command_rx) = mpsc::channel::<RuntimeCommand>(16);
         let (status_tx, status) = watch::channel(RuntimeStatus::default());
         let (stop, mut stop_rx) = tokio::sync::oneshot::channel();
         let (wifi_status_tx, mut wifi_status_rx) = mpsc::channel::<WiFiRuntimeStatus>(16);
@@ -382,12 +389,13 @@ impl RuntimeSupervisor {
                         let _ = dispatcher.cancel_target_except_device(&profile.id, &profile.device_id);
                     }
                     let mut current_config = config;
+                    let mut collection_running = false;
                     let mut status_tick = tokio::time::interval(Duration::from_millis(20));
                     let mut upload_tick = tokio::time::interval(Duration::from_secs(current_config.upload_interval_seconds));
                     upload_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                     let mut latest_events: HashMap<String, CollectorEvent> = HashMap::new();
-                    let worker = scan.map(|scan| PeriodicCollectorHandle::start(scan, current_config.wifi_enabled, Duration::from_secs(1), events_for_worker.clone(), wifi_status_tx));
-                    let bluetooth_worker = bluetooth_scan.map(|scan| BluetoothWorkerHandle::start(scan, current_config.bluetooth_enabled, Duration::from_secs(1), events_for_bluetooth_worker.clone(), bluetooth_status_tx));
+                    let worker = scan.map(|scan| PeriodicCollectorHandle::start(scan, false, Duration::from_secs(1), events_for_worker.clone(), wifi_status_tx));
+                    let bluetooth_worker = bluetooth_scan.map(|scan| BluetoothWorkerHandle::start(scan, false, Duration::from_secs(1), events_for_bluetooth_worker.clone(), bluetooth_status_tx));
                     let mut wifi_runtime = WiFiRuntimeStatus::default();
                     let mut bluetooth_runtime = BluetoothRuntimeStatus::default();
                     loop {
@@ -413,14 +421,19 @@ impl RuntimeSupervisor {
                                     let _ = dispatcher.persist_event(&current_config, &envelope);
                                 }
                             }
-                            Some(updated_config) = config_rx.recv() => {
+                            Some(command) = command_rx.recv() => {
+                                let (updated_config, next_running) = match command {
+                                    RuntimeCommand::Config(updated_config) => (updated_config, collection_running),
+                                    RuntimeCommand::Collection { config: updated_config, running } => (updated_config, running),
+                                };
                                 supervisor.apply_config(&updated_config).await;
                                 for profile in updated_config.selected_servers() {
                                     let _ = dispatcher.unblock_target(&profile.id);
                                     let _ = dispatcher.cancel_target_except_device(&profile.id, &profile.device_id);
                                 }
-                                if let Some(worker) = worker.as_ref() { worker.configure(updated_config.wifi_enabled, Duration::from_secs(1)); }
-                                if let Some(worker) = bluetooth_worker.as_ref() { worker.configure(updated_config.bluetooth_enabled, Duration::from_secs(1)); }
+                                if let Some(worker) = worker.as_ref() { worker.configure(updated_config.wifi_enabled && next_running, Duration::from_secs(1)); }
+                                if let Some(worker) = bluetooth_worker.as_ref() { worker.configure(updated_config.bluetooth_enabled && next_running, Duration::from_secs(1)); }
+                                collection_running = next_running;
                                 upload_tick = tokio::time::interval(Duration::from_secs(updated_config.upload_interval_seconds));
                                 upload_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                                 current_config = updated_config;
@@ -434,6 +447,7 @@ impl RuntimeSupervisor {
                             _ = status_tick.tick() => {
                                 let servers = supervisor.statuses();
                                 let mut snapshot = RuntimeStatus::default();
+                                snapshot.collection_running = collection_running;
                                 snapshot.connection = servers
                                     .iter()
                                     .find(|s| s.connection == ConnectionState::Ready)
@@ -465,7 +479,7 @@ impl RuntimeSupervisor {
             .map_err(|error| RuntimeError::Thread(error.to_string()))?;
         Ok(Self {
             events,
-            config_updates,
+            commands,
             status,
             stop: Some(stop),
             thread: Some(thread),
@@ -487,8 +501,18 @@ impl RuntimeSupervisor {
     }
 
     pub fn update_config(&self, config: ClientConfig) -> Result<(), RuntimeError> {
-        self.config_updates
-            .try_send(config)
+        self.commands
+            .try_send(RuntimeCommand::Config(config))
+            .map_err(|_| RuntimeError::EventChannelClosed)
+    }
+
+    pub fn set_collection_running(
+        &self,
+        config: ClientConfig,
+        running: bool,
+    ) -> Result<(), RuntimeError> {
+        self.commands
+            .try_send(RuntimeCommand::Collection { config, running })
             .map_err(|_| RuntimeError::EventChannelClosed)
     }
 
@@ -549,6 +573,7 @@ impl Runtime {
     pub fn status(&self) -> Result<RuntimeStatus, RuntimeError> {
         Ok(RuntimeStatus {
             connection: ConnectionState::Disconnected,
+            collection_running: false,
             wifi: CollectorStatus::NotImplemented,
             wifi_runtime: WiFiRuntimeStatus::default(),
             bluetooth: CollectorStatus::NotImplemented,
