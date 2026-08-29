@@ -13,6 +13,9 @@
 - Verified the user-provided WSS endpoint with auth, device_list, environment_data, and successful data_result ACK. Fixed legacy Core control-frame parsing and one-shot smoke return semantics, and added Windows single-instance protection.
 - Final workspace tests and Release rebuild passed after the real-backend repair; launching the final EXE twice leaves one Collector process.
 - Fixed Tauri event-listener ACL by adding `core:event:default`; normalized Multi -> Single mode transitions to select a valid active profile even when the UI sends a stale/null active ID.
+- Combined Wi-Fi and Bluetooth latest snapshots into one `environment` upload envelope with one sequence/ACK per pair; RuntimeStatus/UI now expose continuously refreshed snapshots, counts, details, and combined success/failure counters. BLE/Classic scans run concurrently with reliable BLE callback delivery and a 120-second rolling Bluetooth observation cache.
+- Enabled WinRT extended BLE advertisements, initialized the WinRT apartment in the scanner, lengthened Classic inquiry, and verified the hardware probe improved to BLE=1 / Classic=3 on the validation host. Counts remain dependent on discoverable radio traffic.
+- Finalized continuous combined snapshot behavior: one Wi-Fi+Bluetooth `environment` packet per compatible pair, one sequence/ACK and success/failure increment, live UI snapshots/details, reusable rolling Bluetooth cache, and parallel BLE/Classic scans.
 
 ### Phase 2-C Windows Desktop Production (partial)
 
