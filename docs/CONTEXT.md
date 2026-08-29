@@ -48,7 +48,9 @@ Status: Partial. All local code and test gates pass, and real Windows hardware s
 - Rebuilt from cleaned Rust target: PASS; `cargo clean` followed by the Tauri Release pipeline completed from source.
 - Release artifacts: `Release/Windows/RemoteEnvCollector/RemoteEnvCollector.exe` (12,103,680 bytes), `Release/Windows/RemoteEnvCollector-Setup.exe` (3,059,089 bytes), both version `0.2.0`.
 - Packaged nested EXE process smoke: PASS; remained alive for 5 seconds and was then stopped. The root-level `Release/Windows/RemoteEnvCollector.exe` path is not produced by the current script.
-- Real Tauri desktop UI E2E/WebDriver interaction: NOT EXECUTED.
+- New source Release rebuild after latest changes: PASS; `release-build-new.log` confirms fresh React build, Tauri optimized compilation, and NSIS packaging.
+- New artifacts: `Release/Windows/RemoteEnvCollector/RemoteEnvCollector.exe` (12,094,464 bytes) and `Release/Windows/RemoteEnvCollector-Setup.exe` (3,059,956 bytes), both version `0.2.0`.
+- Latest source changes (listener installation no longer reports a false failure, pending connection state is retained until Ready, and per-operation state is preserved) pass `npm run build` and `cargo check -p remote-env-desktop`.
 - `cargo run -p remote-env-platform-windows --example windows_wifi_scan`: PASS, 1 interface, 10 networks, 1501 ms.
 - `netsh wlan show interfaces`: Hardware On, Software On.
 - `netsh wlan show networks mode=bssid`: 6 visible SSID groups, multiple BSS entries.

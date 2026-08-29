@@ -78,29 +78,36 @@ function App() {
   const applyStatus = React.useCallback((incoming: RuntimeStatus) => {
     const runtimeIntent = runtimeIntentRef.current;
     const pendingConnections = pendingConnectionsRef.current;
-    const merged = { ...incoming, servers: incoming.servers.map(server => {
+    const servers = [...incoming.servers];
+    Object.keys(pendingConnections).forEach(profileId => {
+      if (pendingConnections[profileId] && !servers.some(server => server.profile_id === profileId)) {
+        servers.push({ profile_id: profileId, connection: "Connecting", heartbeat_alive: false, last_heartbeat_ms: null, pending: 0, in_flight: 0, blocked: 0 });
+      }
+    });
+    const merged = { ...incoming, servers: servers.map(server => {
       if (pendingConnections[server.profile_id] && server.connection === "Stopped") {
         return { ...server, connection: "Connecting" };
       }
       if (server.connection === "Ready") delete pendingConnections[server.profile_id];
       return server;
     }) };
-    if (runtimeIntent === "start" && !incoming.collection_running) merged.collection_running = true;
-    if (runtimeIntent === "stop" && incoming.collection_running) merged.collection_running = false;
+    if (runtimeIntent === "start" && incoming.collection_running) runtimeIntentRef.current = null;
+    if (runtimeIntent === "stop" && !incoming.collection_running) runtimeIntentRef.current = null;
     setStatus(merged);
   }, []);
   const installStatusListener = React.useCallback(async () => {
     const generation = ++statusEventGeneration.current;
-    const unlisten = await listen<RuntimeStatus>("runtime_status_changed", event => {
+    listen<RuntimeStatus>("runtime_status_changed", event => {
       if (generation === statusEventGeneration.current) applyStatus(event.payload);
+    }).then(unlisten => {
+      if (generation !== statusEventGeneration.current) unlisten();
     });
-    return unlisten;
   }, [applyStatus]);
   const reload = React.useCallback(async () => {
     const [nextStatus, nextConfig] = await Promise.all([invoke<RuntimeStatus>("get_runtime_status"), invoke<Config>("get_desktop_config")]);
     applyStatus(nextStatus); setConfig(nextConfig);
   }, [applyStatus]);
-  React.useEffect(() => { let off: (() => void) | undefined; installStatusListener().then(unlisten => { off = unlisten; }).catch(() => setNotice("无法监听运行状态。")); reload().catch(() => setNotice("无法读取应用状态。")); return () => { statusEventGeneration.current += 1; off?.(); }; }, [installStatusListener, reload]);
+  React.useEffect(() => { installStatusListener(); reload().catch(() => setNotice("无法读取应用状态。")); return () => { statusEventGeneration.current += 1; }; }, [installStatusListener, reload]);
   React.useEffect(() => { const blocked = status.servers.find(server => server.connection === "Blocked"); if (blocked) { setNotice(`服务器连接被拒绝（${blocked.profile_id}）：${blocked.last_error ?? "未提供具体原因"}`); } }, [status.servers]);
   const saveOptions = async (next: Partial<Config>) => { try { const result = await invoke<Config>("set_runtime_options", { serverMode: next.server_mode ?? config.server_mode, activeServerId: next.active_server_id ?? config.active_server_id, wifiEnabled: next.wifi_enabled ?? config.wifi_enabled, bluetoothEnabled: next.bluetooth_enabled ?? config.bluetooth_enabled, scanIntervalSeconds: next.scan_interval_seconds ?? config.scan_interval_seconds, uploadIntervalSeconds: next.upload_interval_seconds ?? config.upload_interval_seconds }); setConfig(result); } catch { setNotice("保存采集服务设置失败。") } };
   const openNew = () => { setEditing(null); setDialogOpen(true); setForm({ name: "", url: "", device_id: "", token: "" }); setShowToken(false); };
@@ -109,7 +116,7 @@ function App() {
   const testServer = async (id: string) => { if (busy) return; setBusy(`test:${id}`); setNotice("正在测试连接..."); try { const result = await invoke<{ message: string }>("test_server_profile", { id }); setNotice(result.message); } catch (error) { setNotice(String(error)); } finally { setBusy(null); } };
   const removeServer = async (id: string) => { if (!confirm("确定删除此服务器配置吗？")) return; try { setConfig(await invoke<Config>("delete_server_profile", { id })); } catch { setNotice("删除服务器配置失败。") } };
   const toggle = async () => { if (runtimeBusyRef.current) return; runtimeBusyRef.current = true; const shouldStart = !status.collection_running; runtimeIntentRef.current = shouldStart ? "start" : "stop"; setBusy("runtime"); try { const next = await invoke<RuntimeStatus>(shouldStart ? "start_runtime" : "stop_runtime"); applyStatus(next); setNotice(shouldStart ? "采集服务已启动。" : "采集服务已停止，服务器连接保持独立运行。"); runtimeIntentRef.current = null; } catch (error) { runtimeIntentRef.current = null; setNotice(`采集服务操作失败：${String(error)}`); } finally { runtimeBusyRef.current = false; setBusy(null); } };
-  const connect = async (id: string) => { if (!serverActionAllowed(id)) return; pendingConnectionsRef.current[id] = true; serverBusyRef.current[id] = true; markServerAction(id); setBusy(`connect:${id}`); setNotice("正在建立持久连接..."); try { const result = await invoke<RuntimeStatus>("connect_server_profile", { id }); applyStatus(result); setNotice("服务器连接已启动，正在等待认证结果。"); } catch (error) { delete pendingConnectionsRef.current[id]; setNotice(`服务器连接失败：${String(error)}`); } finally { serverBusyRef.current[id] = false; setBusy(null); } };
+  const connect = async (id: string) => { if (!serverActionAllowed(id)) return; pendingConnectionsRef.current[id] = true; serverBusyRef.current[id] = true; markServerAction(id); setBusy(`connect:${id}`); setNotice("正在建立持久连接..."); try { const result = await invoke<RuntimeStatus>("connect_server_profile", { id }); applyStatus(result); setNotice("服务器连接已提交，等待认证结果。"); } catch (error) { delete pendingConnectionsRef.current[id]; setNotice(`服务器连接失败：${String(error)}`); } finally { serverBusyRef.current[id] = false; setBusy(null); } };
   const disconnect = async (id: string) => { if (!serverActionAllowed(id)) return; pendingConnectionsRef.current[id] = false; serverBusyRef.current[id] = true; markServerAction(id); setBusy(`disconnect:${id}`); try { const result = await invoke<RuntimeStatus>("disconnect_server_profile", { id }); setStatus(result); setConfig(current => ({ ...current, server_profiles: current.server_profiles.map(server => server.id === id ? { ...server, enabled: false } : server) })); setNotice("服务器已断开。"); } catch (error) { setNotice(`服务器断开失败：${String(error)}`); } finally { serverBusyRef.current[id] = false; setBusy(null); } };
   const toggleServer = async (server: Server) => { if (serverBusyRef.current[server.id] || !serverActionAllowed(server.id)) return; serverBusyRef.current[server.id] = true; markServerAction(server.id); setBusy(`toggle:${server.id}`); try { const result = await invoke<RuntimeStatus>("set_server_enabled", { id: server.id, enabled: !server.enabled }); setStatus(result); setConfig(current => ({ ...current, active_server_id: !server.enabled ? server.id : current.active_server_id, server_profiles: current.server_profiles.map(item => item.id === server.id ? { ...item, enabled: !server.enabled } : item) })); setNotice(!server.enabled ? "服务器已启用，采集服务状态不变。" : "服务器已断开。"); } catch (error) { setNotice(`服务器切换失败：${String(error)}`); } finally { serverBusyRef.current[server.id] = false; setBusy(null); } };
   const scan = async (kind: "wifi" | "bluetooth") => { if (scanBusy[kind]) return; setScanBusy(current => ({ ...current, [kind]: true })); setNotice(`正在扫描${kind === "wifi" ? " Wi-Fi" : "蓝牙"}...`); try { const event = await invoke<{ data: unknown }>(kind === "wifi" ? "scan_wifi_now" : "scan_bluetooth_now"); setScanData(current => ({ ...current, [kind]: event.data })); const value = event.data as Record<string, unknown>; const items = Array.isArray(value.networks) ? value.networks : Array.isArray(value.observations) ? value.observations : []; setScanSummary(current => ({ ...current, [kind]: { ...(current[kind]), ...(kind === "wifi" ? { network_count: items.length } : { device_count: items.length }), last_scan_ms: Date.now(), duration_ms: Number(value.scan_duration_ms ?? 0) } })); setNotice(`${kind === "wifi" ? "Wi-Fi" : "蓝牙"}扫描完成。`); } catch (error) { setNotice(String(error)); } finally { setScanBusy(current => ({ ...current, [kind]: false })); } };
