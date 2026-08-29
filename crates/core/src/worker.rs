@@ -142,7 +142,7 @@ impl ServerWorker {
             heartbeat_interval,
             heartbeat_monitor: HeartbeatMonitor::new(
                 heartbeat_interval,
-                heartbeat_interval,
+                Duration::from_secs(60),
             ),
         }
     }
@@ -241,8 +241,6 @@ impl ServerWorker {
             )));
         }
         self.publish(ConnectionState::Ready);
-        self.heartbeat_monitor.mark_pong();
-        self.mark_heartbeat();
         let mut heartbeat = tokio::time::interval(self.heartbeat_interval);
         heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut in_flight = None;
@@ -350,7 +348,7 @@ impl ServerWorker {
 
     fn publish(&mut self, connection: ConnectionState) {
         self.status.connection = connection;
-        self.status.heartbeat_alive = connection == ConnectionState::Ready;
+        self.status.heartbeat_alive = false;
         if connection != ConnectionState::Ready {
             self.status.last_heartbeat_ms = None;
         }

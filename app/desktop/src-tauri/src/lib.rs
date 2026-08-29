@@ -159,6 +159,11 @@ fn load_config(path: &PathBuf) -> Result<(StateStore, ClientConfig), String> {
     for profile in &mut config.server_profiles {
         profile.token = protect::decrypt(&profile.token).map_err(user_error)?;
     }
+    let mut heartbeat_migrated = false;
+    if config.heartbeat_interval_seconds != 5 {
+        config.heartbeat_interval_seconds = 5;
+        heartbeat_migrated = true;
+    }
     let mut migrated = false;
     if !config.identity.device_id.is_empty() {
         for profile in &mut config.server_profiles {
@@ -173,7 +178,7 @@ fn load_config(path: &PathBuf) -> Result<(StateStore, ClientConfig), String> {
             .load_or_create_identity("RemoteEnvCollector", "windows", "")
             .map_err(user_error)?;
         save_config(&store, &config)?;
-    } else if migrated {
+    } else if migrated || heartbeat_migrated {
         save_config(&store, &config)?;
     }
     Ok((store, config))

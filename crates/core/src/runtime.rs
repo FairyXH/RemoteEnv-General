@@ -31,20 +31,19 @@ fn persist_latest_events(
     dispatcher: &UploadDispatcher,
     config: &ClientConfig,
     latest_events: &mut HashMap<String, CollectorEvent>,
-) {
+) -> Result<(), RuntimeError> {
     for (_, event) in latest_events.drain() {
         let device_id = config.identity.device_id.clone();
         let timestamp = now_ms();
-        let sequence = store
-            .next_timestamp_sequence(&device_id, &event.data_type)
-            .unwrap_or_else(|_| timestamp as u64);
+        let sequence = store.next_timestamp_sequence(&device_id, &event.data_type)?;
         let envelope = EnvironmentEnvelope {
             timestamp,
             sequence,
             ..EnvironmentEnvelope::new(device_id, event.data_type, sequence, event.data)
         };
-        let _ = dispatcher.persist_event(config, &envelope);
+        dispatcher.persist_event(config, &envelope)?;
     }
+    Ok(())
 }
 
 #[derive(Clone)]
@@ -444,11 +443,15 @@ impl RuntimeSupervisor {
                             Some(event) = event_rx.recv() => {
                                 latest_events.insert(event.data_type.clone(), event);
                                 if collection_running {
-                                    persist_latest_events(&store, &dispatcher, &current_config, &mut latest_events);
+                                    if let Err(error) = persist_latest_events(&store, &dispatcher, &current_config, &mut latest_events) {
+                                        eprintln!("runtime event persistence failed: {error}");
+                                    }
                                 }
                             }
                             _ = upload_tick.tick(), if collection_running => {
-                                persist_latest_events(&store, &dispatcher, &current_config, &mut latest_events);
+                                if let Err(error) = persist_latest_events(&store, &dispatcher, &current_config, &mut latest_events) {
+                                    eprintln!("runtime upload persistence failed: {error}");
+                                }
                             }
                             Some(command) = command_rx.recv() => {
                                 let (updated_config, next_running) = match command {
@@ -462,10 +465,15 @@ impl RuntimeSupervisor {
                                 }
                                 if let Some(worker) = worker.as_ref() { worker.configure(updated_config.wifi_enabled && next_running, Duration::from_secs(updated_config.scan_interval_seconds)); }
                                 if let Some(worker) = bluetooth_worker.as_ref() { worker.configure(updated_config.bluetooth_enabled && next_running, Duration::from_secs(updated_config.scan_interval_seconds)); }
-                                collection_running = next_running;
                                 upload_tick = tokio::time::interval(Duration::from_millis(updated_config.upload_interval_seconds.saturating_mul(1000).max(100)));
                                 upload_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                                 current_config = updated_config;
+                                collection_running = next_running;
+                                if collection_running {
+                                    if let Err(error) = persist_latest_events(&store, &dispatcher, &current_config, &mut latest_events) {
+                                        eprintln!("runtime start persistence failed: {error}");
+                                    }
+                                }
                             }
                             Some(updated_wifi) = wifi_status_rx.recv() => {
                                 wifi_runtime = updated_wifi;

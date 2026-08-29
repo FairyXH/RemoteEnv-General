@@ -121,9 +121,36 @@ async fn controlled_fixture() -> ControlledFixture {
     fixture
 }
 
-async fn wait_received(received: &Arc<Mutex<Vec<Value>>>, count: usize) {
+async fn wait_received(label: &str, received: &Arc<Mutex<Vec<Value>>>, count: usize) {
     tokio::time::timeout(Duration::from_secs(5), async {
         while received.lock().unwrap().len() < count {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("{label}: timed out waiting for {count} messages, received {}", received.lock().unwrap().len()));
+}
+
+async fn wait_ready(runtime: &RuntimeSupervisor, count: usize) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while runtime
+            .status()
+            .servers
+            .iter()
+            .filter(|server| server.connection.to_string() == "Ready")
+            .count()
+            != count
+        {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
+async fn wait_collection_running(runtime: &RuntimeSupervisor) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !runtime.status().collection_running {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
@@ -226,6 +253,7 @@ async fn bluetooth_multi_server_ack_isolation_and_recovery_preserve_envelope() {
         hardware: None,
     };
     config.server_mode = ServerMode::Multi;
+    config.bluetooth_enabled = false;
     config.scan_interval_seconds = 1;
     config.upload_interval_seconds = 1;
     config.heartbeat_interval_seconds = 1;
@@ -250,12 +278,13 @@ async fn bluetooth_multi_server_ack_isolation_and_recovery_preserve_envelope() {
     config.active_server_id = Some("bluetooth-a".into());
     let mut runtime = RuntimeSupervisor::start(config.clone(), store.clone()).unwrap();
     runtime.set_collection_running(config, true).unwrap();
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    wait_ready(&runtime, 2).await;
+    wait_collection_running(&runtime).await;
     a.ack.store(false, Ordering::SeqCst);
     b.ack.store(false, Ordering::SeqCst);
     runtime.submit(CollectorEvent { data_type: "bluetooth".into(), timestamp_ms: 1, data: serde_json::json!({"observations":[{"address":"AA:BB:CC:DD:EE:01","transport":"ble","name":"fixture"}]}) }).unwrap();
-    wait_received(&a.received, 1).await;
-    wait_received(&b.received, 1).await;
+    wait_received("A 首次", &a.received, 1).await;
+    wait_received("B 首次", &b.received, 1).await;
     let initial = a.received.lock().unwrap()[0].clone();
     let sequence = initial["sequence"].as_u64().expect("sequence must be numeric");
     assert_ne!(
@@ -275,7 +304,7 @@ async fn bluetooth_multi_server_ack_isolation_and_recovery_preserve_envelope() {
     a.ack.store(true, Ordering::SeqCst);
     a.disconnect.notify_waiters();
     tokio::time::sleep(Duration::from_millis(100)).await;
-    wait_received(&a.received, 2).await;
+    wait_received("A 重传", &a.received, 2).await;
     let first = a.received.lock().unwrap()[0].clone();
     let resent = a.received.lock().unwrap()[1].clone();
     assert_eq!(first["device_id"], resent["device_id"]);
@@ -301,10 +330,10 @@ async fn bluetooth_multi_server_ack_isolation_and_recovery_preserve_envelope() {
             .as_deref(),
         Some("completed")
     );
-    a.disconnect.notify_waiters();
+    b.disconnect.notify_waiters();
     tokio::time::sleep(Duration::from_millis(100)).await;
     b.ack.store(true, Ordering::SeqCst);
-    wait_received(&b.received, 2).await;
+    wait_received("B 重传", &b.received, 2).await;
     let first = b.received.lock().unwrap()[0].clone();
     let resent = b.received.lock().unwrap()[1].clone();
     assert_eq!(first["device_id"], resent["device_id"]);
