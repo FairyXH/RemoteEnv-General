@@ -490,7 +490,6 @@ async fn phase_175c_single_to_multi_and_rate_limit_keep_other_target_independent
     wait_ready(&runtime, 1).await;
     runtime.submit(event("single")).unwrap();
     a.wait_for(|server| !server.sequences().is_empty()).await;
-    let first_sequence = a.sequences()[0];
     assert!(b.sequences().is_empty());
     let mut multi = single;
     multi.server_mode = ServerMode::Multi;
