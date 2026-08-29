@@ -104,12 +104,15 @@ function App() {
     if (generation !== statusEventGeneration.current) unlisten();
   }, [applyStatus]);
   const reload = React.useCallback(async () => {
-    const [nextStatus, nextConfig] = await Promise.all([invoke<RuntimeStatus>("get_runtime_status"), invoke<Config>("get_desktop_config")]);
+    let nextStatus: RuntimeStatus;
+    let nextConfig: Config;
+    try { nextStatus = await invoke<RuntimeStatus>("get_runtime_status"); } catch (error) { throw new Error(`读取运行状态失败：${String(error)}`); }
+    try { nextConfig = await invoke<Config>("get_desktop_config"); } catch (error) { throw new Error(`读取桌面配置失败：${String(error)}`); }
     applyStatus(nextStatus); setConfig(nextConfig);
   }, [applyStatus]);
-  React.useEffect(() => { let active = true; (async () => { await installStatusListener(); if (active) await reload(); })().catch(() => setNotice("无法读取应用状态。")); return () => { active = false; statusEventGeneration.current += 1; }; }, [installStatusListener, reload]);
+  React.useEffect(() => { let active = true; (async () => { await installStatusListener(); if (active) await reload(); })().catch(error => setNotice(String(error))); return () => { active = false; statusEventGeneration.current += 1; }; }, [installStatusListener, reload]);
   React.useEffect(() => { const blocked = status.servers.find(server => server.connection === "Blocked"); if (blocked) { setNotice(`服务器连接被拒绝（${blocked.profile_id}）：${blocked.last_error ?? "未提供具体原因"}`); } }, [status.servers]);
-  const saveOptions = async (next: Partial<Config>) => { try { const result = await invoke<Config>("set_runtime_options", { serverMode: next.server_mode ?? config.server_mode, activeServerId: Object.prototype.hasOwnProperty.call(next, "active_server_id") ? next.active_server_id : config.active_server_id, wifiEnabled: next.wifi_enabled ?? config.wifi_enabled, bluetoothEnabled: next.bluetooth_enabled ?? config.bluetooth_enabled, scanIntervalSeconds: next.scan_interval_seconds ?? config.scan_interval_seconds, uploadIntervalSeconds: next.upload_interval_seconds ?? config.upload_interval_seconds }); setConfig(result); } catch { setNotice("保存采集服务设置失败。") } };
+  const saveOptions = async (next: Partial<Config>) => { try { const result = await invoke<Config>("set_runtime_options", { serverMode: next.server_mode ?? config.server_mode, activeServerId: Object.prototype.hasOwnProperty.call(next, "active_server_id") ? next.active_server_id : config.active_server_id, wifiEnabled: next.wifi_enabled ?? config.wifi_enabled, bluetoothEnabled: next.bluetooth_enabled ?? config.bluetooth_enabled, scanIntervalSeconds: next.scan_interval_seconds ?? config.scan_interval_seconds, uploadIntervalSeconds: next.upload_interval_seconds ?? config.upload_interval_seconds }); setConfig(result); } catch (error) { setNotice(`保存采集服务设置失败：${String(error)}`); } };
   const openNew = () => { setEditing(null); setDialogOpen(true); setForm({ name: "", url: "", device_id: "", token: "" }); setShowToken(false); };
   const edit = (server: Server) => { setEditing(server); setDialogOpen(true); setForm({ name: server.name, url: server.url, device_id: server.device_id, token: "" }); setShowToken(false); };
   const saveServer = async () => { try { const result = await invoke<Config>("save_server_profile", { input: { id: editing?.id, ...form } }); setConfig(result); setDialogOpen(false); setEditing(null); setNotice("服务器配置已保存。"); } catch (error) { setNotice(String(error)); } };

@@ -373,12 +373,18 @@ fn current_status(state: &AppState) -> Result<RuntimeStatus, String> {
 
 #[tauri::command]
 fn get_runtime_status(state: State<'_, AppState>) -> Result<RuntimeStatus, String> {
-    current_status(&state)
+    current_status(&state).map_err(|message| {
+        error(format!("get_runtime_status 失败: {message}"));
+        message
+    })
 }
 
 #[tauri::command]
 fn get_desktop_config(state: State<'_, AppState>) -> Result<DesktopConfigView, String> {
-    let (_, config) = load_config(&state.state_path)?;
+    let (_, config) = load_config(&state.state_path).map_err(|message| {
+        error(format!("get_desktop_config 失败: {message}"));
+        message
+    })?;
     Ok(config_view(&config))
 }
 
