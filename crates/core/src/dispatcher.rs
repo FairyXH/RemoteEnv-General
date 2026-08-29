@@ -86,7 +86,9 @@ impl DispatcherSupervisor {
         }
         for profile in selected {
             let replace = self.workers.get(&profile.id).is_some_and(|worker| {
-                worker.profile.url != profile.url || worker.profile.token != profile.token
+                worker.profile.url != profile.url
+                    || worker.profile.token != profile.token
+                    || worker.profile.device_id != profile.device_id
             });
             if replace {
                 if let Some(worker) = self.workers.remove(&profile.id) {

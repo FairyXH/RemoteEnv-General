@@ -794,19 +794,16 @@ fn stop_runtime(
     state: State<'_, AppState>,
 ) -> Result<RuntimeStatus, String> {
     info("收到停止采集服务请求");
-    let config = load_config(&state.state_path)?.1;
-    {
+    let runtime = {
         let mut guard = state
             .runtime
             .lock()
             .map_err(|_| "应用状态不可用。".to_string())?;
-        if let Some(mut runtime) = guard.take() {
-            runtime
-                .set_collection_running(config, false)
-                .map_err(user_error)?;
-            runtime.stop();
-            info("采集服务及其服务器、采集器已停止");
-        }
+        guard.take()
+    };
+    if let Some(mut runtime) = runtime {
+        runtime.stop();
+        info("采集服务及其服务器、采集器已停止");
     }
     let status = current_status(&state)?;
     let _ = app.emit(STATUS_EVENT, &status);

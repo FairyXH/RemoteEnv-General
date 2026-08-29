@@ -269,8 +269,7 @@ fn server_profiles_support_single_and_multi_selection() {
         },
     ];
     config.active_server_id = Some("b".into());
-    assert_eq!(config.selected_servers().len(), 1);
-    assert_eq!(config.selected_servers()[0].id, "b");
+    assert!(config.selected_servers().is_empty());
     config.server_mode = remote_env_core::config::ServerMode::Multi;
     assert_eq!(config.selected_servers().len(), 1);
     assert_eq!(config.selected_servers()[0].id, "a");

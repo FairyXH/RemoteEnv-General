@@ -421,7 +421,7 @@ impl RuntimeSupervisor {
                 let Ok(runtime) = tokio::runtime::Runtime::new() else { return; };
                 runtime.block_on(async move {
                     let dispatcher = UploadDispatcher::new(store.clone());
-                    let mut supervisor = DispatcherSupervisor::new(dispatcher.clone(), config.identity.clone(), Duration::from_secs(config.heartbeat_interval_seconds));
+                    let mut supervisor = DispatcherSupervisor::new(dispatcher.clone(), config.identity.clone(), Duration::from_secs(5));
                     supervisor.apply_config(&config).await;
                     for profile in config.selected_servers() {
                         let _ = dispatcher.unblock_target(&profile.id);
