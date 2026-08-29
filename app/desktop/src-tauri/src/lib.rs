@@ -579,28 +579,27 @@ fn connect_server_profile(
             .map_err(user_error)?,
         );
     }
-    let status = guard
-        .as_ref()
-        .map(RuntimeSupervisor::status)
-        .map(|mut status| {
-            if !status.servers.iter().any(|server| server.profile_id == id) {
-                status.servers.push(remote_env_core::worker::ServerWorkerStatus {
-                    profile_id: id.clone(),
-                    connection: remote_env_core::transport::ConnectionState::Connecting,
-                    heartbeat_alive: false,
-                    last_heartbeat_ms: None,
-                    last_error: None,
-                    pending: 0,
-                    in_flight: 0,
-                    blocked: 0,
-                    uploaded: 0,
-                    failed: 0,
-                });
-            }
-            status.connection = remote_env_core::transport::ConnectionState::Connecting;
-            status
-        })
-        .unwrap_or_default();
+    let initial_status = guard.as_ref().map(RuntimeSupervisor::status).unwrap_or_default();
+    let mut status = initial_status;
+    if let Some(server) = status.servers.iter_mut().find(|server| server.profile_id == id) {
+        server.connection = remote_env_core::transport::ConnectionState::Connecting;
+        server.heartbeat_alive = false;
+        server.last_heartbeat_ms = None;
+    } else {
+        status.servers.push(remote_env_core::worker::ServerWorkerStatus {
+            profile_id: id.clone(),
+            connection: remote_env_core::transport::ConnectionState::Connecting,
+            heartbeat_alive: false,
+            last_heartbeat_ms: None,
+            last_error: None,
+            pending: 0,
+            in_flight: 0,
+            blocked: 0,
+            uploaded: 0,
+            failed: 0,
+        });
+    }
+    status.connection = remote_env_core::transport::ConnectionState::Connecting;
     let _ = app.emit(STATUS_EVENT, &status);
     info("服务器连接命令已提交");
     Ok(status)
@@ -763,9 +762,13 @@ fn start_runtime(
         );
     }
     if let Some(runtime) = guard.as_ref() {
-        runtime
+        let command_result = runtime
             .set_collection_running(config.clone(), true)
-            .map_err(user_error)?;
+            .map_err(user_error);
+        if command_result.is_ok() {
+            info("采集服务运行命令已发送，等待 Runtime 应用并启动扫描器");
+        }
+        command_result?;
     }
     let status = guard
         .as_ref()
@@ -785,15 +788,19 @@ fn stop_runtime(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<RuntimeStatus, String> {
-    let guard = state
-        .runtime
-        .lock()
-        .map_err(|_| "应用状态不可用。".to_string())?;
-    if let Some(runtime) = guard.as_ref() {
-        let config = load_config(&state.state_path)?.1;
-        runtime
-            .set_collection_running(config, false)
-            .map_err(user_error)?;
+    info("收到停止采集服务请求");
+    let config = load_config(&state.state_path)?.1;
+    {
+        let guard = state
+            .runtime
+            .lock()
+            .map_err(|_| "应用状态不可用。".to_string())?;
+        if let Some(runtime) = guard.as_ref() {
+            runtime
+                .set_collection_running(config, false)
+                .map_err(user_error)?;
+            info("采集服务停止命令已发送");
+        }
     }
     let status = current_status(&state)?;
     let _ = app.emit(STATUS_EVENT, &status);
@@ -802,6 +809,9 @@ fn stop_runtime(
 
 fn spawn_status_bridge(app: tauri::AppHandle) {
     std::thread::spawn(move || {
+        let mut last_connection: Option<String> = None;
+        let mut last_scan_counts = (0_u64, 0_u64, 0_u64, 0_u64);
+        let mut last_heartbeats: std::collections::HashMap<String, Option<i64>> = std::collections::HashMap::new();
         loop {
             std::thread::sleep(Duration::from_millis(200));
             if app.state::<AppState>().exiting.load(Ordering::Acquire) {
@@ -817,6 +827,24 @@ fn spawn_status_bridge(app: tauri::AppHandle) {
                     .and_then(|runtime| runtime.status_has_changed().then(|| runtime.status()))
             };
             if let Some(status) = next {
+                let connection = status.connection.to_string();
+                let counts = (
+                    status.wifi_runtime.successful_scans,
+                    status.wifi_runtime.failed_scans,
+                    status.bluetooth_runtime.successful_scans,
+                    status.bluetooth_runtime.failed_scans,
+                );
+                if last_connection.as_deref() != Some(connection.as_str()) || counts != last_scan_counts {
+                    info(format!("状态变化 connection={connection} collection_running={} wifi={:?} bluetooth={:?} wifi_scans={:?} bluetooth_scans={:?}", status.collection_running, status.wifi, status.bluetooth, status.wifi_runtime, status.bluetooth_runtime));
+                    last_connection = Some(connection);
+                    last_scan_counts = counts;
+                }
+                for server in &status.servers {
+                    let previous = last_heartbeats.insert(server.profile_id.clone(), server.last_heartbeat_ms);
+                    if previous != Some(server.last_heartbeat_ms) {
+                        info(format!("服务器心跳更新 profile_id={} alive={} last_heartbeat_ms={:?}", server.profile_id, server.heartbeat_alive, server.last_heartbeat_ms));
+                    }
+                }
                 let _ = app.emit(STATUS_EVENT, status);
             }
         }

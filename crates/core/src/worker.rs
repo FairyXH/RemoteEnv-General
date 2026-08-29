@@ -142,7 +142,7 @@ impl ServerWorker {
             heartbeat_interval,
             heartbeat_monitor: HeartbeatMonitor::new(
                 heartbeat_interval,
-                heartbeat_interval.saturating_mul(3),
+                heartbeat_interval,
             ),
         }
     }
@@ -244,6 +244,7 @@ impl ServerWorker {
         self.heartbeat_monitor.mark_pong();
         self.mark_heartbeat();
         let mut heartbeat = tokio::time::interval(self.heartbeat_interval);
+        heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut in_flight = None;
         loop {
             if in_flight.is_none() {
@@ -275,6 +276,7 @@ impl ServerWorker {
                     if self.heartbeat_monitor.is_timed_out() {
                         return Err(WorkerError::Transport);
                     }
+                    // The server contract is JSON text ping every five seconds.
                     socket.send(Message::Text(r#"{"type":"ping"}"#.into())).await.map_err(|_| WorkerError::Transport)?;
                 }
                 message = socket.next() => {
@@ -373,14 +375,21 @@ where
     S: StreamExt + Unpin,
     S::Item: Into<Result<Message, tokio_tungstenite::tungstenite::Error>>,
 {
-    let message = socket
-        .next()
-        .await
-        .ok_or(WorkerError::Transport)?
-        .into()
-        .map_err(|_| WorkerError::Transport)?;
-    serde_json::from_str(message.to_text().map_err(|_| WorkerError::Protocol)?)
-        .map_err(|_| WorkerError::Protocol)
+    loop {
+        let message = socket
+            .next()
+            .await
+            .ok_or(WorkerError::Transport)?
+            .into()
+            .map_err(|_| WorkerError::Transport)?;
+        match message {
+            Message::Text(text) => {
+                return serde_json::from_str::<Value>(&text).map_err(|_| WorkerError::Protocol);
+            }
+            Message::Ping(_) | Message::Pong(_) | Message::Binary(_) | Message::Frame(_) => continue,
+            Message::Close(_) => return Err(WorkerError::Transport),
+        }
+    }
 }
 
 fn now_ms() -> i64 {

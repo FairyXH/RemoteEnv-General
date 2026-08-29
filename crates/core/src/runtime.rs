@@ -26,9 +26,30 @@ use tokio::time::timeout;
 
 pub type CollectorScan = std::sync::Arc<dyn Fn() -> Result<CollectorEvent, String> + Send + Sync>;
 
+fn persist_latest_events(
+    store: &StateStore,
+    dispatcher: &UploadDispatcher,
+    config: &ClientConfig,
+    latest_events: &mut HashMap<String, CollectorEvent>,
+) {
+    for (_, event) in latest_events.drain() {
+        let device_id = config.identity.device_id.clone();
+        let timestamp = now_ms();
+        let sequence = store
+            .next_timestamp_sequence(&device_id, &event.data_type)
+            .unwrap_or_else(|_| timestamp as u64);
+        let envelope = EnvironmentEnvelope {
+            timestamp,
+            sequence,
+            ..EnvironmentEnvelope::new(device_id, event.data_type, sequence, event.data)
+        };
+        let _ = dispatcher.persist_event(config, &envelope);
+    }
+}
+
 #[derive(Clone)]
 struct CollectorControl {
-    commands: mpsc::Sender<CollectorCommand>,
+    commands: mpsc::UnboundedSender<CollectorCommand>,
 }
 
 enum CollectorCommand {
@@ -54,7 +75,7 @@ impl PeriodicCollectorHandle {
         events: mpsc::Sender<CollectorEvent>,
         statuses: mpsc::Sender<WiFiRuntimeStatus>,
     ) -> Self {
-        let (commands, mut command_rx) = mpsc::channel(4);
+        let (commands, mut command_rx) = mpsc::unbounded_channel();
         let stop = Arc::new(AtomicBool::new(false));
         let stop_for_thread = Arc::clone(&stop);
         let thread = std::thread::Builder::new()
@@ -134,11 +155,10 @@ impl PeriodicCollectorHandle {
         let _ = self
             .control
             .commands
-            .try_send(CollectorCommand::Configure { enabled, interval });
+            .send(CollectorCommand::Configure { enabled, interval });
     }
     fn stop(&mut self) {
         self.stop.store(true, Ordering::Release);
-        // The scan runs in spawn_blocking; joining here blocks the Runtime command path.
         let _ = self.thread.take();
     }
 }
@@ -157,7 +177,7 @@ impl BluetoothWorkerHandle {
         events: mpsc::Sender<CollectorEvent>,
         statuses: mpsc::Sender<BluetoothRuntimeStatus>,
     ) -> Self {
-        let (commands, mut command_rx) = mpsc::channel(4);
+        let (commands, mut command_rx) = mpsc::unbounded_channel();
         let stop = Arc::new(AtomicBool::new(false));
         let stop_flag = Arc::clone(&stop);
         let thread = std::thread::Builder::new().name("remote-env-bluetooth-worker".into()).spawn(move || {
@@ -209,11 +229,10 @@ impl BluetoothWorkerHandle {
         let _ = self
             .control
             .commands
-            .try_send(CollectorCommand::Configure { enabled, interval });
+            .send(CollectorCommand::Configure { enabled, interval });
     }
     fn stop(&mut self) {
         self.stop.store(true, Ordering::Release);
-        // The scan runs in spawn_blocking; joining here blocks the Runtime command path.
         let _ = self.thread.take();
     }
 }
@@ -420,19 +439,12 @@ impl RuntimeSupervisor {
                             _ = &mut stop_rx => break,
                             Some(event) = event_rx.recv() => {
                                 latest_events.insert(event.data_type.clone(), event);
+                                if collection_running {
+                                    persist_latest_events(&store, &dispatcher, &current_config, &mut latest_events);
+                                }
                             }
                             _ = upload_tick.tick(), if collection_running => {
-                                for (_, event) in latest_events.drain() {
-                                    let device_id = current_config.identity.device_id.clone();
-                                    let timestamp = now_ms();
-                                    let sequence = store.next_timestamp_sequence(&device_id, &event.data_type).unwrap_or(0);
-                                    let envelope = EnvironmentEnvelope {
-                                        timestamp,
-                                        sequence,
-                                        ..EnvironmentEnvelope::new(device_id, event.data_type, sequence, event.data)
-                                    };
-                                    let _ = dispatcher.persist_event(&current_config, &envelope);
-                                }
+                                persist_latest_events(&store, &dispatcher, &current_config, &mut latest_events);
                             }
                             Some(command) = command_rx.recv() => {
                                 let (updated_config, next_running) = match command {
@@ -533,9 +545,9 @@ impl RuntimeSupervisor {
         if let Some(stop) = self.stop.take() {
             let _ = stop.send(());
         }
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
+        // The runtime thread is already stopped through the cancellation channel.
+        // Dropping the join handle avoids blocking the Tauri command on native scans.
+        let _ = self.thread.take();
     }
 }
 

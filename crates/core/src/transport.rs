@@ -314,4 +314,8 @@ impl HeartbeatMonitor {
         self.last_pong
             .is_some_and(|last| last.elapsed() > self.timeout)
     }
+
+    pub fn last_pong_age(&self) -> Option<Duration> {
+        self.last_pong.map(|last| last.elapsed())
+    }
 }

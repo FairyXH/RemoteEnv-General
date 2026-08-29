@@ -101,7 +101,7 @@ impl StateStore {
                 |row| row.get(0),
             )
             .optional()?;
-        let latest = current.unwrap_or(0).max(timestamp as i64);
+        let latest = current.unwrap_or(0).max(timestamp as i64).saturating_add(1);
         connection.execute("INSERT INTO sequences(device_id,data_type,value) VALUES(?1,?2,?3) ON CONFLICT(device_id,data_type) DO UPDATE SET value=excluded.value", params![device_id, data_type, latest])?;
         Ok(latest as u64)
     }

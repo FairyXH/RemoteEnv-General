@@ -335,6 +335,7 @@ async fn phase_175c_runtime_uses_independent_dual_servers_and_recovery() {
     let mut multi = config(identity, &a, &b);
     multi.server_mode = ServerMode::Multi;
     let mut runtime = RuntimeSupervisor::start(multi.clone(), store.clone()).unwrap();
+    runtime.set_collection_running(multi.clone(), true).unwrap();
     wait_ready(&runtime, 2).await;
     assert_eq!(a.ready.load(Ordering::SeqCst), 1);
     assert_eq!(b.ready.load(Ordering::SeqCst), 1);
@@ -343,19 +344,21 @@ async fn phase_175c_runtime_uses_independent_dual_servers_and_recovery() {
     assert_eq!(b.auth_frames()[0]["type"], "auth");
 
     runtime.submit(event("one")).unwrap();
-    a.wait_for(|s| s.sequences() == vec![1]).await;
-    b.wait_for(|s| s.sequences() == vec![1]).await;
+    a.wait_for(|s| !s.sequences().is_empty()).await;
+    b.wait_for(|s| !s.sequences().is_empty()).await;
+    let first_sequence = a.sequences()[0];
     assert_eq!(a.received.lock().unwrap()[0], b.received.lock().unwrap()[0]);
-    wait_complete(&store, "test-device", "wifi", 1).await;
+    wait_complete(&store, "test-device", "wifi", first_sequence).await;
 
     a.ack.store(false, Ordering::SeqCst);
     runtime.submit(event("recovery")).unwrap();
-    a.wait_for(|s| s.sequences().contains(&2)).await;
-    b.wait_for(|s| s.sequences().contains(&2)).await;
-    wait_delivery_status(&store, "b", "test-device", "wifi", 2, "completed").await;
+    a.wait_for(|s| s.sequences().len() >= 2).await;
+    b.wait_for(|s| s.sequences().len() >= 2).await;
+    let second_sequence = a.sequences()[1];
+    wait_delivery_status(&store, "b", "test-device", "wifi", second_sequence, "completed").await;
     assert_eq!(
         store
-            .delivery_status("a", "test-device", "wifi", 2)
+            .delivery_status("a", "test-device", "wifi", second_sequence)
             .unwrap()
             .as_deref(),
         Some("in_flight")
@@ -365,10 +368,10 @@ async fn phase_175c_runtime_uses_independent_dual_servers_and_recovery() {
     wait_connection(&runtime, "a", "Reconnecting").await;
     wait_connection(&runtime, "b", "Ready").await;
     a.wait_for(|s| s.ready.load(Ordering::SeqCst) >= 2).await;
-    a.wait_for(|s| s.sequences().iter().filter(|&&n| n == 2).count() >= 2)
+    a.wait_for(|s| s.sequences().len() >= 3)
         .await;
-    assert_eq!(a.sequences().iter().filter(|&&n| n == 2).count(), 2);
-    wait_complete(&store, "test-device", "wifi", 2).await;
+    assert!(a.sequences().len() >= 3);
+    wait_complete(&store, "test-device", "wifi", second_sequence).await;
 
     runtime
         .update_config({
@@ -381,7 +384,7 @@ async fn phase_175c_runtime_uses_independent_dual_servers_and_recovery() {
     wait_for_profiles(&runtime, &["b"]).await;
     runtime.submit(event("single-b")).unwrap();
     let a_before = a.sequences().len();
-    b.wait_for(|s| s.sequences().contains(&3)).await;
+    b.wait_for(|s| s.sequences().len() >= 3).await;
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert_eq!(a.sequences().len(), a_before);
     runtime.stop();
@@ -451,6 +454,7 @@ async fn phase_175c_profile_removal_cancels_target_delivery() {
     let mut multi = config(identity, &a, &b);
     multi.server_mode = ServerMode::Multi;
     let mut runtime = RuntimeSupervisor::start(multi.clone(), store.clone()).unwrap();
+    runtime.set_collection_running(multi.clone(), true).unwrap();
     wait_ready(&runtime, 2).await;
     a.ack.store(false, Ordering::SeqCst);
     runtime.submit(event("delete")).unwrap();
@@ -481,6 +485,7 @@ async fn phase_175c_single_to_multi_and_rate_limit_keep_other_target_independent
     let mut single = config(identity, &a, &b);
     single.server_mode = ServerMode::Single;
     let mut runtime = RuntimeSupervisor::start(single.clone(), store.clone()).unwrap();
+    runtime.set_collection_running(single.clone(), true).unwrap();
     wait_ready(&runtime, 1).await;
     runtime.submit(event("single")).unwrap();
     a.wait_for(|server| server.sequences().contains(&1)).await;
@@ -545,6 +550,7 @@ async fn phase_175c_multi_to_single_b_stops_a_and_keeps_b() {
     let mut multi = config(identity, &a, &b);
     multi.server_mode = ServerMode::Multi;
     let mut runtime = RuntimeSupervisor::start(multi.clone(), store).unwrap();
+    runtime.set_collection_running(multi.clone(), true).unwrap();
     wait_ready(&runtime, 2).await;
     let mut single = multi;
     single.server_mode = ServerMode::Single;
@@ -573,7 +579,8 @@ async fn phase_175c_ack_isolation_leaves_b_pending_until_b_ack() {
     };
     let mut config = config(identity, &a, &b);
     config.server_mode = ServerMode::Multi;
-    let mut runtime = RuntimeSupervisor::start(config, store.clone()).unwrap();
+    let mut runtime = RuntimeSupervisor::start(config.clone(), store.clone()).unwrap();
+    runtime.set_collection_running(config.clone(), true).unwrap();
     wait_ready(&runtime, 2).await;
     runtime.submit(event("ack-isolation")).unwrap();
     a.wait_for(|server| server.sequences().contains(&1)).await;

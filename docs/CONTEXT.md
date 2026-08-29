@@ -6,7 +6,7 @@ Read this file, `ARCHITECTURE.md`, and `DEVELOPMENT.md` before changes. For tran
 
 ## Current state
 
-Phase 2-A is implemented and locally validated. Phase 2-B Windows BLE + Classic Bluetooth is complete locally: unified scanning, Runtime, delivery, multi-server recovery, raw AD preservation, UI, tests, and real hardware probe all pass. Real backend upload remains intentionally untested.
+Phase 2-C desktop lifecycle repair remains Partial. This round found that the persisted user config had `heartbeat_interval_seconds=15` and `scan_interval_seconds=30`, while the Runtime worker previously hardcoded/used inconsistent values. It also found that existing AppData logs contained only Tauri command-entry records, not worker protocol or scan evidence. Source changes now add safer status intent handling, async supervisor join behavior, richer bridge logging, UI listener reconciliation, per-operation busy guards, and protocol control-frame tolerance. These changes compile, but they are not accepted as behaviorally complete until the full integration tests and real desktop clicks pass.
 
 ## Completed
 
@@ -39,8 +39,16 @@ Status: Partial. All local code and test gates pass, and real Windows hardware s
 
 - `cargo fmt --check`: PASS
 - `cargo check --workspace`: PASS
-- `cargo test --workspace`: PASS; Core unit 2, Core phase1 14 passed/1 ignored, Phase 1.75-C 8, Phase 2-A 2, Windows platform 4.
-- `app/ui`: `npm run build` PASS.
+- `cargo check -p remote-env-core` and `cargo check -p remote-env-desktop`: PASS after the latest source changes.
+- `app/ui`: `npm run build`: PASS; latest bundle includes per-operation guards and listener reconciliation.
+- Playwright `1.62.0`, Chromium, pywinauto `0.6.9`: installed.
+- Native desktop process/UIA discovery: process starts and window `远程环境采集器` is visible; pywinauto enumeration hung on the Tauri/WebView2 tree, and CDP port probing was unavailable. Actual button clicks and DOM assertions: NOT COMPLETED.
+- `cargo test -p remote-env-core --test phase175c`: STILL FAILS (3/8 previously; latest run also exposed stale stop assertion and remaining fixture timeouts). Do not mark behavior complete.
+- `cargo fmt --all -- --check`: FAIL because pre-existing formatting differences remain in `crates/core/src/state.rs` and `crates/core/tests/phase2b.rs`.
+- Rebuilt from cleaned Rust target: PASS; `cargo clean` followed by the Tauri Release pipeline completed from source.
+- Release artifacts: `Release/Windows/RemoteEnvCollector/RemoteEnvCollector.exe` (12,103,680 bytes), `Release/Windows/RemoteEnvCollector-Setup.exe` (3,059,089 bytes), both version `0.2.0`.
+- Packaged nested EXE process smoke: PASS; remained alive for 5 seconds and was then stopped. The root-level `Release/Windows/RemoteEnvCollector.exe` path is not produced by the current script.
+- Real Tauri desktop UI E2E/WebDriver interaction: NOT EXECUTED.
 - `cargo run -p remote-env-platform-windows --example windows_wifi_scan`: PASS, 1 interface, 10 networks, 1501 ms.
 - `netsh wlan show interfaces`: Hardware On, Software On.
 - `netsh wlan show networks mode=bssid`: 6 visible SSID groups, multiple BSS entries.
@@ -52,7 +60,7 @@ Status: Partial. Windows Release pipeline, unified version `0.2.0`, Chinese desk
 
 ## Next step
 
-Run the environment-only real backend Wi-Fi smoke test with user-provided `REMOTE_ENV_TEST_URL`, `REMOTE_ENV_TEST_DEVICE_ID`, `REMOTE_ENV_TEST_TOKEN`, and `REMOTE_ENV_TEST_SEQUENCE`, then clean all variables. Phase 2-C work is now in progress; do not start Phase 3 without confirmation.
+First isolate the remaining Phase 1.75-C timeout (inspect worker status and fixture frame order rather than weakening tests). Then add regression coverage for Connect-only transitional status, five-second heartbeat freshness reset, immediate scan on Start, and Stop latency with a blocking scanner. Only after the workspace suite is green should the Tauri release build and real WebDriver/native desktop E2E be run. Current workspace has the two lifecycle commits `49865ec` and `98c63b3` plus the uncommitted context update; do not mark Phase 2-C complete.
 
 ## Existing phase history
 
