@@ -544,13 +544,26 @@ fn set_runtime_options(
     config.scan_interval_seconds = scan_interval_seconds;
     config.upload_interval_seconds = upload_interval_seconds;
     if config.server_mode == ServerMode::Single && !config.server_profiles.is_empty() {
-        let active = config.active_server_id.as_deref();
-        if active.is_none()
-            || !config
+        let active_is_valid = config.active_server_id.as_deref().is_some_and(|active| {
+            config
                 .server_profiles
                 .iter()
-                .any(|profile| Some(profile.id.as_str()) == active)
-        {
+                .any(|profile| profile.enabled && profile.id == active)
+        });
+        if !active_is_valid {
+            config.active_server_id = config
+                .server_profiles
+                .iter()
+                .find(|profile| profile.enabled)
+                .map(|profile| profile.id.clone());
+        }
+        if config.active_server_id.is_none() {
+            if let Some(profile) = config.server_profiles.first_mut() {
+                profile.enabled = true;
+                config.active_server_id = Some(profile.id.clone());
+            }
+        }
+        if config.active_server_id.is_none() {
             return Err("单服务器模式必须选择有效的活动服务器。".into());
         }
     }

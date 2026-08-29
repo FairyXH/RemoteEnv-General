@@ -12,6 +12,7 @@
 - Final packaged UI click/input E2E remains pending because pywinauto could not enumerate the Tauri WebView2 control tree.
 - Verified the user-provided WSS endpoint with auth, device_list, environment_data, and successful data_result ACK. Fixed legacy Core control-frame parsing and one-shot smoke return semantics, and added Windows single-instance protection.
 - Final workspace tests and Release rebuild passed after the real-backend repair; launching the final EXE twice leaves one Collector process.
+- Fixed Tauri event-listener ACL by adding `core:event:default`; normalized Multi -> Single mode transitions to select a valid active profile even when the UI sends a stale/null active ID.
 
 ### Phase 2-C Windows Desktop Production (partial)
 
