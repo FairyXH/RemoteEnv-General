@@ -169,9 +169,15 @@ async fn bluetooth_event_uses_shared_sequence_and_completes_delivery() {
             data: serde_json::json!({"observations":[{"address":"AA:BB:CC:DD:EE:01","transport":"ble","name":"fixture","rssi":-61},{"address":"11:22:33:44:55:66","transport":"classic","name":"Keyboard","class_of_device":123456}],"ble_available":true,"classic_available":true,"scan_duration_ms":4}),
         })
     }) as Arc<dyn Fn() -> Result<CollectorEvent, String> + Send + Sync>;
-    let mut runtime =
-        RuntimeSupervisor::start_with_collectors(config(url), store.clone(), None, Some(scan))
-            .unwrap();
+    let run_config = config(url);
+    let mut runtime = RuntimeSupervisor::start_with_collectors(
+        run_config.clone(),
+        store.clone(),
+        None,
+        Some(scan),
+    )
+    .unwrap();
+    runtime.set_collection_running(run_config, true).unwrap();
     tokio::time::timeout(Duration::from_secs(5), async {
         while received.lock().unwrap().is_empty() {
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -242,23 +248,26 @@ async fn bluetooth_multi_server_ack_isolation_and_recovery_preserve_envelope() {
         },
     ];
     config.active_server_id = Some("bluetooth-a".into());
-    let mut runtime = RuntimeSupervisor::start(config, store.clone()).unwrap();
+    let mut runtime = RuntimeSupervisor::start(config.clone(), store.clone()).unwrap();
+    runtime.set_collection_running(config, true).unwrap();
     tokio::time::sleep(Duration::from_millis(100)).await;
     a.ack.store(false, Ordering::SeqCst);
     b.ack.store(false, Ordering::SeqCst);
     runtime.submit(CollectorEvent { data_type: "bluetooth".into(), timestamp_ms: 1, data: serde_json::json!({"observations":[{"address":"AA:BB:CC:DD:EE:01","transport":"ble","name":"fixture"}]}) }).unwrap();
     wait_received(&a.received, 1).await;
     wait_received(&b.received, 1).await;
+    let initial = a.received.lock().unwrap()[0].clone();
+    let sequence = initial["sequence"].as_u64().expect("sequence must be numeric");
     assert_ne!(
         store
-            .delivery_status("bluetooth-a", "phase2b-multi-device", "bluetooth", 1)
+            .delivery_status("bluetooth-a", "phase2b-multi-device", "bluetooth", sequence)
             .unwrap()
             .as_deref(),
         Some("completed")
     );
     assert_ne!(
         store
-            .delivery_status("bluetooth-b", "phase2b-multi-device", "bluetooth", 1)
+            .delivery_status("bluetooth-b", "phase2b-multi-device", "bluetooth", sequence)
             .unwrap()
             .as_deref(),
         Some("completed")
@@ -275,7 +284,7 @@ async fn bluetooth_multi_server_ack_isolation_and_recovery_preserve_envelope() {
     assert_eq!(first["data"], resent["data"]);
     tokio::time::timeout(Duration::from_secs(5), async {
         while store
-            .delivery_status("bluetooth-a", "phase2b-multi-device", "bluetooth", 1)
+            .delivery_status("bluetooth-a", "phase2b-multi-device", "bluetooth", sequence)
             .unwrap()
             .as_deref()
             != Some("completed")
@@ -287,7 +296,7 @@ async fn bluetooth_multi_server_ack_isolation_and_recovery_preserve_envelope() {
     .unwrap();
     assert_ne!(
         store
-            .delivery_status("bluetooth-b", "phase2b-multi-device", "bluetooth", 1)
+            .delivery_status("bluetooth-b", "phase2b-multi-device", "bluetooth", sequence)
             .unwrap()
             .as_deref(),
         Some("completed")
@@ -304,7 +313,7 @@ async fn bluetooth_multi_server_ack_isolation_and_recovery_preserve_envelope() {
     assert_eq!(first["data"], resent["data"]);
     tokio::time::timeout(Duration::from_secs(5), async {
         while !store
-            .event_complete("phase2b-multi-device", "bluetooth", 1)
+            .event_complete("phase2b-multi-device", "bluetooth", sequence)
             .unwrap()
         {
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -333,8 +342,14 @@ async fn bluetooth_dynamic_enable_disable_reuses_one_worker() {
     let mut config = config(url);
     config.bluetooth_enabled = false;
     config.scan_interval_seconds = 1;
-    let mut runtime =
-        RuntimeSupervisor::start_with_collectors(config.clone(), store, None, Some(scan)).unwrap();
+    let mut runtime = RuntimeSupervisor::start_with_collectors(
+        config.clone(),
+        store,
+        None,
+        Some(scan),
+    )
+    .unwrap();
+    runtime.set_collection_running(config.clone(), true).unwrap();
     tokio::time::sleep(Duration::from_millis(1200)).await;
     assert_eq!(calls.load(Ordering::SeqCst), 0);
     let mut enabled = config.clone();

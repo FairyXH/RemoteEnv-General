@@ -170,23 +170,26 @@ async fn wifi_event_reaches_upload_delivery_and_completes() {
         hardware: None,
     };
     let scan: CollectorScan = Arc::new(|| Ok(snapshot_event()));
+    let run_config = config(identity, &fixture);
     let mut runtime = RuntimeSupervisor::start_with_collector(
-        config(identity, &fixture),
+        run_config.clone(),
         store.clone(),
         Some(scan),
     )
     .unwrap();
+    runtime.set_collection_running(run_config, true).unwrap();
     fixture
         .wait_for(|fixture| !fixture.received.lock().unwrap().is_empty())
         .await;
     let payload = fixture.received.lock().unwrap()[0].clone();
     assert_eq!(payload["data_type"], "wifi");
     assert_eq!(payload["data"]["networks"][0]["bssid"], "AA:BB:CC:DD:EE:FF");
-    assert_eq!(payload["sequence"], 1);
-    wait_completed(&store, "wifi-runtime-device", 1).await;
+    let sequence = payload["sequence"].as_u64().expect("sequence must be numeric");
+    assert!(sequence > 1_000_000_000_000);
+    wait_completed(&store, "wifi-runtime-device", sequence).await;
     assert!(
         store
-            .event_complete("wifi-runtime-device", "wifi", 1)
+            .event_complete("wifi-runtime-device", "wifi", sequence)
             .unwrap()
     );
     runtime.stop();
@@ -208,9 +211,14 @@ async fn wifi_delivery_reconnects_with_same_sequence_and_envelope() {
     let scan: CollectorScan = Arc::new(|| Ok(snapshot_event()));
     let mut recovery_config = config(identity, &fixture);
     recovery_config.wifi_enabled = false;
-    let mut runtime =
-        RuntimeSupervisor::start_with_collector(recovery_config, store.clone(), Some(scan))
-            .unwrap();
+    let mut runtime = RuntimeSupervisor::start_with_collector(
+        recovery_config.clone(),
+        store.clone(),
+        Some(scan),
+    )
+    .unwrap();
+    let running = recovery_config;
+    runtime.set_collection_running(running, true).unwrap();
     fixture.ack.store(false, Ordering::SeqCst);
     runtime.submit(snapshot_event()).unwrap();
     fixture
@@ -219,7 +227,7 @@ async fn wifi_delivery_reconnects_with_same_sequence_and_envelope() {
     let first = fixture.received.lock().unwrap()[0].clone();
     assert!(matches!(
         store
-            .delivery_status("wifi-server", "wifi-recovery-device", "wifi", 1)
+            .delivery_status("wifi-server", "wifi-recovery-device", "wifi", first["sequence"].as_u64().unwrap())
             .unwrap()
             .as_deref(),
         Some("pending") | Some("in_flight")
@@ -235,10 +243,10 @@ async fn wifi_delivery_reconnects_with_same_sequence_and_envelope() {
     assert_eq!(first["data_type"], resent["data_type"]);
     assert_eq!(first["sequence"], resent["sequence"]);
     assert_eq!(first["data"], resent["data"]);
-    wait_completed(&store, "wifi-recovery-device", 1).await;
+    wait_completed(&store, "wifi-recovery-device", first["sequence"].as_u64().unwrap()).await;
     assert_eq!(
         store.get_sequence("wifi-recovery-device", "wifi").unwrap(),
-        Some(1)
+        Some(first["sequence"].as_u64().unwrap())
     );
     runtime.stop();
 }

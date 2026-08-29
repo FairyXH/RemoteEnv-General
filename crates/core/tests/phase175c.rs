@@ -458,13 +458,14 @@ async fn phase_175c_profile_removal_cancels_target_delivery() {
     wait_ready(&runtime, 2).await;
     a.ack.store(false, Ordering::SeqCst);
     runtime.submit(event("delete")).unwrap();
-    a.wait_for(|server| server.sequences().contains(&1)).await;
+    a.wait_for(|server| !server.sequences().is_empty()).await;
+    let sequence = a.sequences()[0];
     let mut single = multi;
     single.server_mode = ServerMode::Single;
     single.active_server_id = Some("b".into());
     runtime.update_config(single).unwrap();
     wait_for_profiles(&runtime, &["b"]).await;
-    wait_delivery_status(&store, "a", "delete-device", "wifi", 1, "cancelled").await;
+    wait_delivery_status(&store, "a", "delete-device", "wifi", sequence, "cancelled").await;
     runtime.stop();
 }
 
@@ -488,7 +489,8 @@ async fn phase_175c_single_to_multi_and_rate_limit_keep_other_target_independent
     runtime.set_collection_running(single.clone(), true).unwrap();
     wait_ready(&runtime, 1).await;
     runtime.submit(event("single")).unwrap();
-    a.wait_for(|server| server.sequences().contains(&1)).await;
+    a.wait_for(|server| !server.sequences().is_empty()).await;
+    let first_sequence = a.sequences()[0];
     assert!(b.sequences().is_empty());
     let mut multi = single;
     multi.server_mode = ServerMode::Multi;
@@ -496,12 +498,13 @@ async fn phase_175c_single_to_multi_and_rate_limit_keep_other_target_independent
     wait_ready(&runtime, 2).await;
     b.rate_limit(true);
     runtime.submit(event("limited")).unwrap();
-    a.wait_for(|server| server.sequences().contains(&2)).await;
-    b.wait_for(|server| server.sequences().contains(&2)).await;
-    wait_delivery_status(&store, "a", "transition-device", "wifi", 2, "completed").await;
+    a.wait_for(|server| server.sequences().len() >= 2).await;
+    b.wait_for(|server| server.sequences().len() >= 2).await;
+    let second_sequence = a.sequences()[1];
+    wait_delivery_status(&store, "a", "transition-device", "wifi", second_sequence, "completed").await;
     assert_ne!(
         store
-            .delivery_status("b", "transition-device", "wifi", 2)
+            .delivery_status("b", "transition-device", "wifi", second_sequence)
             .unwrap()
             .as_deref(),
         Some("completed")
@@ -558,7 +561,7 @@ async fn phase_175c_multi_to_single_b_stops_a_and_keeps_b() {
     runtime.update_config(single).unwrap();
     wait_for_profiles(&runtime, &["b"]).await;
     runtime.submit(event("single-b")).unwrap();
-    b.wait_for(|server| server.sequences().contains(&1)).await;
+    b.wait_for(|server| !server.sequences().is_empty()).await;
     runtime.stop();
 }
 
@@ -583,14 +586,15 @@ async fn phase_175c_ack_isolation_leaves_b_pending_until_b_ack() {
     runtime.set_collection_running(config.clone(), true).unwrap();
     wait_ready(&runtime, 2).await;
     runtime.submit(event("ack-isolation")).unwrap();
-    a.wait_for(|server| server.sequences().contains(&1)).await;
-    b.wait_for(|server| server.sequences().contains(&1)).await;
-    wait_delivery_status(&store, "a", "ack-device", "wifi", 1, "in_flight").await;
-    wait_delivery_status(&store, "b", "ack-device", "wifi", 1, "completed").await;
-    assert!(!store.event_complete("ack-device", "wifi", 1).unwrap());
+    a.wait_for(|server| !server.sequences().is_empty()).await;
+    b.wait_for(|server| !server.sequences().is_empty()).await;
+    let sequence = a.sequences()[0];
+    wait_delivery_status(&store, "a", "ack-device", "wifi", sequence, "in_flight").await;
+    wait_delivery_status(&store, "b", "ack-device", "wifi", sequence, "completed").await;
+    assert!(!store.event_complete("ack-device", "wifi", sequence).unwrap());
     a.ack.store(true, Ordering::SeqCst);
     a.disconnect.notify_one();
-    wait_complete(&store, "ack-device", "wifi", 1).await;
+    wait_complete(&store, "ack-device", "wifi", sequence).await;
     runtime.stop();
 }
 
