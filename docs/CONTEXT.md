@@ -16,7 +16,9 @@ The Tauri icon was rebuilt from `app/ui/res/mipmap-xxxhdpi/logo.png` into a mult
 
 本轮最终验证：`cargo fmt --all` PASS；`cargo check --workspace` PASS；`cargo test --workspace` PASS（14 phase1 tests + 1 ignored real-backend smoke、8 phase175c、3 phase2a、3 phase2b、Windows 12 tests；缺少环境变量的 real-backend smoke 未执行）；后续补充 `cargo check --workspace` 与 Windows 12 项测试在增加 `address_type`/网络 timestamp 后仍 PASS；`app/ui` 的 `npm run build` PASS；`scripts/build-release.ps1` 正式 Windows Release PASS。最终产物：`Release/Windows/RemoteEnvCollector/RemoteEnvCollector.exe`（12,438,528 bytes）和 `Release/Windows/RemoteEnvCollector-Setup.exe`（3,101,560 bytes）。复制后的 EXE 启动并保持存活 5 秒后停止，属于进程冒烟而非完整 UI 点击验收。服务器端 Pydantic 运行时验证未执行，因为当前 Server 项目 Python 环境缺少 `fastapi` 依赖；协议字段依据已读取的 `api.md` 与 `models.py` 审查，并由本地 Rust fixtures 覆盖。
 
-本轮工作区仍包含此前已存在的 Tauri 生命周期、Core 测试和 Release 二进制变更；未回滚。sequence 修正源代码已通过本地检查/测试，正式 Release 已重建并完成 EXE 5 秒进程冒烟；当前仍未完成：真实 Windows Wi-Fi/Bluetooth 后端上传复测、安装包安装验收、WebView2 UI 自动点击/截图 E2E。下一步应先完成真实后端复测，再在可用的交互式 Windows UI 自动化环境中完成其他验收；在此之前 Phase 2-C 继续保持 Partial。
+本轮工作区仍包含此前已存在的 Tauri 生命周期、Core 测试和 Release 二进制变更；未回滚。sequence 修正源代码已通过本地检查/测试，`rate_limited` 退避修正后的正式 Release 已重建并完成 EXE 5 秒进程冒烟；当前仍未完成：真实 Windows Wi-Fi/Bluetooth 后端上传复测、安装包安装验收、WebView2 UI 自动点击/截图 E2E。下一步应先完成真实后端复测，再在可用的交互式 Windows UI 自动化环境中完成其他验收；在此之前 Phase 2-C 继续保持 Partial。
+
+2026-08-30 rate limit follow-up: ServerWorker 对 `rate_limited` 明确返回本地 `RateLimited`，不再把它伪装成普通连接错误；worker 仍无限重连，退避为 `1s,2s,4s,8s,16s,32s,60s,60s...`，只有真实 `data_result` ACK 后重置退避，Runtime stop 可中断等待。新增指数退避封顶测试通过。正式 Release：`Release/Windows/RemoteEnvCollector/RemoteEnvCollector.exe` 12,443,136 bytes，安装包 3,096,876 bytes；EXE 5 秒启动冒烟通过。真实后端限流复测尚未执行。
 
 2026-08-30 sequence follow-up: 用户实际日志显示服务端拒绝旧 sequence。已修正 `StateStore::next_sequence`、`Runtime`、`EnvironmentEnvelope::with_timestamp` 和 `ServerWorker` recovery，所有新建/恢复 sequence 都至少为当前 Unix epoch milliseconds，并保持持久状态严格递增。测试 `phase1` 14 passed/1 ignored，`cargo check --workspace` passed。该修正尚需正式 Release 重建和真实后端复测。
 

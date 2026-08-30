@@ -50,6 +50,8 @@ pub enum WorkerError {
     Connection(String),
     #[error("worker transport failed")]
     Transport,
+    #[error("server rate limited uploads")]
+    RateLimited,
     #[error("worker protocol failed")]
     Protocol,
     #[error("worker authentication is blocked: {0}")]
@@ -148,7 +150,7 @@ impl ServerWorker {
         let mut backoff = Backoff::new(1, 60);
         loop {
             self.publish(ConnectionState::Connecting);
-            let result = self.run_connection(&mut stop).await;
+            let result = self.run_connection(&mut stop, &mut backoff).await;
             if let Err(error) = &result {
                 if !matches!(error, WorkerError::Stopped) {
                     self.status.failed = self.status.failed.saturating_add(1);
@@ -166,9 +168,6 @@ impl ServerWorker {
                 self.publish(ConnectionState::Blocked);
                 return;
             }
-            if result.is_ok() {
-                backoff.reset();
-            }
             self.publish(ConnectionState::Reconnecting);
             let delay = backoff.delay();
             tokio::select! {
@@ -181,6 +180,7 @@ impl ServerWorker {
     async fn run_connection(
         &mut self,
         stop: &mut oneshot::Receiver<()>,
+        backoff: &mut Backoff,
     ) -> Result<(), WorkerError> {
         let connect = connect_async_tls_with_config(
             &self.profile.url,
@@ -307,6 +307,9 @@ impl ServerWorker {
                             let ack: Ack = serde_json::from_value(value).map_err(|_| WorkerError::Protocol)?;
                             if !self.dispatcher.acknowledge(&self.profile.id, id, &ack, &envelope)? { return Err(WorkerError::Protocol); }
                             self.status.uploaded = self.status.uploaded.saturating_add(1);
+                            // Reset backoff only after a real upload ACK. A rate-limited
+                            // reconnect must continue escalating instead of looping at 1s.
+                            backoff.reset();
                             self.refresh_counts();
                         }
                         ServerEvent::FatalError if value["code"] == "unknown_device" => {
@@ -333,7 +336,9 @@ impl ServerWorker {
                             if let Some((id, _)) = in_flight.take() { self.dispatcher.block(&self.profile.id, id)?; }
                             return Err(WorkerError::Blocked(format!("服务器拒绝连接/上传: {}", value)));
                         }
-                        ServerEvent::RetryableError => return Err(WorkerError::Connection(format!("服务器返回可重试错误: {}", value))),
+                        ServerEvent::RetryableError => {
+                            return Err(WorkerError::RateLimited);
+                        }
                         _ => {}
                     }
                 }

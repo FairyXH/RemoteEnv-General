@@ -27,6 +27,19 @@ struct TestServer {
     changed: Arc<Notify>,
 }
 
+#[test]
+fn rate_limited_reconnect_backoff_is_exponential_and_capped() {
+    let mut backoff = remote_env_core::transport::Backoff::new(1, 60);
+    assert_eq!(backoff.next_delay_seconds(), 1);
+    assert_eq!(backoff.next_delay_seconds(), 2);
+    assert_eq!(backoff.next_delay_seconds(), 4);
+    assert_eq!(backoff.next_delay_seconds(), 8);
+    assert_eq!(backoff.next_delay_seconds(), 16);
+    assert_eq!(backoff.next_delay_seconds(), 32);
+    assert_eq!(backoff.next_delay_seconds(), 60);
+    assert_eq!(backoff.next_delay_seconds(), 60);
+}
+
 impl TestServer {
     async fn start() -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -355,7 +368,15 @@ async fn phase_175c_runtime_uses_independent_dual_servers_and_recovery() {
     a.wait_for(|s| s.sequences().len() >= 2).await;
     b.wait_for(|s| s.sequences().len() >= 2).await;
     let second_sequence = a.sequences()[1];
-    wait_delivery_status(&store, "b", "test-device", "wifi", second_sequence, "completed").await;
+    wait_delivery_status(
+        &store,
+        "b",
+        "test-device",
+        "wifi",
+        second_sequence,
+        "completed",
+    )
+    .await;
     assert_eq!(
         store
             .delivery_status("a", "test-device", "wifi", second_sequence)
@@ -368,8 +389,7 @@ async fn phase_175c_runtime_uses_independent_dual_servers_and_recovery() {
     wait_connection(&runtime, "a", "Reconnecting").await;
     wait_connection(&runtime, "b", "Ready").await;
     a.wait_for(|s| s.ready.load(Ordering::SeqCst) >= 2).await;
-    a.wait_for(|s| s.sequences().len() >= 3)
-        .await;
+    a.wait_for(|s| s.sequences().len() >= 3).await;
     assert!(a.sequences().len() >= 3);
     wait_complete(&store, "test-device", "wifi", second_sequence).await;
 
@@ -486,7 +506,9 @@ async fn phase_175c_single_to_multi_and_rate_limit_keep_other_target_independent
     let mut single = config(identity, &a, &b);
     single.server_mode = ServerMode::Single;
     let mut runtime = RuntimeSupervisor::start(single.clone(), store.clone()).unwrap();
-    runtime.set_collection_running(single.clone(), true).unwrap();
+    runtime
+        .set_collection_running(single.clone(), true)
+        .unwrap();
     wait_ready(&runtime, 1).await;
     runtime.submit(event("single")).unwrap();
     a.wait_for(|server| !server.sequences().is_empty()).await;
@@ -500,7 +522,15 @@ async fn phase_175c_single_to_multi_and_rate_limit_keep_other_target_independent
     a.wait_for(|server| server.sequences().len() >= 2).await;
     b.wait_for(|server| server.sequences().len() >= 2).await;
     let second_sequence = a.sequences()[1];
-    wait_delivery_status(&store, "a", "transition-device", "wifi", second_sequence, "completed").await;
+    wait_delivery_status(
+        &store,
+        "a",
+        "transition-device",
+        "wifi",
+        second_sequence,
+        "completed",
+    )
+    .await;
     assert_ne!(
         store
             .delivery_status("b", "transition-device", "wifi", second_sequence)
@@ -582,7 +612,9 @@ async fn phase_175c_ack_isolation_leaves_b_pending_until_b_ack() {
     let mut config = config(identity, &a, &b);
     config.server_mode = ServerMode::Multi;
     let mut runtime = RuntimeSupervisor::start(config.clone(), store.clone()).unwrap();
-    runtime.set_collection_running(config.clone(), true).unwrap();
+    runtime
+        .set_collection_running(config.clone(), true)
+        .unwrap();
     wait_ready(&runtime, 2).await;
     runtime.submit(event("ack-isolation")).unwrap();
     a.wait_for(|server| !server.sequences().is_empty()).await;
@@ -590,7 +622,11 @@ async fn phase_175c_ack_isolation_leaves_b_pending_until_b_ack() {
     let sequence = a.sequences()[0];
     wait_delivery_status(&store, "a", "ack-device", "wifi", sequence, "in_flight").await;
     wait_delivery_status(&store, "b", "ack-device", "wifi", sequence, "completed").await;
-    assert!(!store.event_complete("ack-device", "wifi", sequence).unwrap());
+    assert!(
+        !store
+            .event_complete("ack-device", "wifi", sequence)
+            .unwrap()
+    );
     a.ack.store(true, Ordering::SeqCst);
     a.disconnect.notify_one();
     wait_complete(&store, "ack-device", "wifi", sequence).await;
