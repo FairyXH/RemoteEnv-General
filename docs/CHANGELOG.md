@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Tray auto-start `--tray` (2026-08-30)
+
+- 新增自启动参数 `--tray`：以该参数启动时主窗口保持隐藏，程序驻留系统托盘并自动开始采集；托盘菜单仍可「打开主窗口/启动/停止/退出」。
+- 实现：`main.rs` 解析参数；窗口配置改为默认隐藏，`RunEvent::Ready` 时普通模式显示窗口、托盘模式保持隐藏；setup 后台线程调用 `start_runtime` 自动开始采集（无有效服务器配置时记录 WARN，不弹窗崩溃）。
+- UI 页面顶部新增 `--tray` 参数使用说明（快捷方式/命令示例）。
+- 验证：`cargo check --workspace`、`cargo test --workspace`、`app/ui npm run build`、正式 Release 均 PASS；Release EXE 以 `--tray` 启动后主窗口 `IsWindowVisible=False` 且进程存活，普通模式窗口可见。Commits: `4f2407a`、`004fd5a`、`1576c87`。
+
 ### Upload payload alignment with RemoteEnvServer API (2026-08-30)
 
 - Windows Wi-Fi upload now matches the server `WiFiData` schema completely: `interface`, `is_connected`, `gateway`, `dns_servers`, `ip_address` are filled from the live adapter via `GetAdaptersAddresses`/WLAN state when connected, and `is_connected` is only reported true when all required connection details are present; `signal_dbm` is emitted alongside `rssi`. RSSI values outside the server-valid dBm range are omitted rather than rejected.

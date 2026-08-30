@@ -8,6 +8,20 @@ Read this file, `ARCHITECTURE.md`, and `DEVELOPMENT.md` before changes. For tran
 
 Status: Implemented, source-verified, and packaged into a fresh Windows Release.
 
+### Tray auto-start `--tray` (same round, after user request)
+
+用户要求新增自启动参数 `--tray`。已实现并验证：
+
+- `app/desktop/src-tauri/src/main.rs`：解析 `--tray` 并传入 `run(tray_start)`。
+- `app/desktop/src-tauri/src/lib.rs`：
+  - `tauri.conf.json` 窗口 `visible: false`（默认隐藏，避免托盘模式闪现）；
+  - `RunEvent::Ready` 时普通模式 `window.show()`，托盘模式保持隐藏；
+  - setup 后台线程（延迟 500ms）调用 `start_runtime` 自动开始采集；无有效服务器配置时记录 WARN，不崩溃；
+  - 托盘菜单原有「打开主窗口/启动/停止/退出」不变。
+- `app/ui/src/main.tsx` + `styles.css`：页面顶部新增 `--tray` 使用说明条（含命令示例）。
+- 验证：`cargo check --workspace` PASS；`cargo test --workspace` PASS；`app/ui npm run build` PASS；正式 Release PASS。Release EXE 实测：`--tray` 启动 8 秒后进程存活、主窗口（标题「远程环境采集器」）`IsWindowVisible=False`；普通启动主窗口 `IsWindowVisible=True`。日志确认「收到 --tray 参数，隐藏主窗口并自动开始采集」。
+- Commits: `4f2407a`（feat）、`004fd5a`（Ready 隐藏）、`1576c87`（默认隐藏窗口配置）。
+
 ### Follow-up fix (user feedback, same round)
 
 用户反馈两个问题：(1) WiFi 信息没有成功上传；(2) 服务端看到大量蓝牙扩展字段（`mode`/`rawAdvertisementSections`/per-device `technology`）。
