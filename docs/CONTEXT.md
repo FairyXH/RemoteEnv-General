@@ -8,6 +8,16 @@ Read this file, `ARCHITECTURE.md`, and `DEVELOPMENT.md` before changes. For tran
 
 Status: Implemented, source-verified, and packaged into a fresh Windows Release.
 
+### Follow-up fix (user feedback, same round)
+
+用户反馈两个问题：(1) WiFi 信息没有成功上传；(2) 服务端看到大量蓝牙扩展字段（`mode`/`rawAdvertisementSections`/per-device `technology`）。
+
+**根因与修复**：
+1. **WiFi 未上传**：`Runtime::persist_latest_events` 此前在 WiFi+蓝牙都启用时把两者合并为一个 `data_type="bluetooth"` envelope，WiFi 只作为 `data.wifi` 扩展字段。服务端按 `data_type` 选择并保存 schema，因此 WiFi 永远不以 `data_type="wifi"` 入库/展示。已改为**每个采集源独立上传**：WiFi 事件 → `data_type="wifi"`（`WiFiData`），蓝牙事件 → `data_type="bluetooth"`（`BluetoothData`），不再合并、不再丢弃。
+2. **蓝牙扩展字段**：服务端 `BluetoothDevice` 标准字段（address/address_type/name/is_connected/is_paired/rssi/tx_power/manufacturer_id/manufacturer_data/service_uuids/service_data/raw/rawHex/rawLength/timestamp）此前已完整上传；用户看到的 `mode`/`technology`/`rawAdvertisementSections` 是 `extra="allow"` 保留的扩展字段，不是标准字段缺失。为保持服务端数据只含协议字段，上传边界（`normalize_protocol_data`）现在剥离每个 device 的 `mode`、per-device `technology`、`rawAdvertisementSections`；本地 `RuntimeStatus` 快照仍保留这些诊断字段供 UI 展示。
+
+**验证**：`cargo fmt --all -- --check` PASS；`cargo check --workspace` PASS；`cargo test --workspace` PASS（phase1 14+1 忽略、phase175c 9、phase2a 3、phase2b 3、Windows 14）；`app/ui npm run build` PASS；RemoteEnvServer `models.py` 直接 Pydantic 校验（独立 wifi envelope、独立 bluetooth envelope、扩展字段剥离、connected-wifi 缺 gateway 拒绝）6/6 PASS。正式 Release 重建见下文。
+
 本轮核心目标是把 Core/Windows 上传数据结构严格对齐服务端 API（`RemoteEnvServer/remote_env_server/models.py` + `docs/api.md`）。此前 Windows Wi-Fi 上传只发送 `scan_started_at/scan_finished_at/networks`，缺少服务端标准字段；蓝牙 `address_type` 恒为 `unknown`、BLE `service_data` 从未解析；Wi-Fi+蓝牙组合 envelope 顶层缺少 Bluetooth schema 标准字段。
 
 ### 本轮完成
@@ -25,9 +35,9 @@ Status: Implemented, source-verified, and packaged into a fresh Windows Release.
    - BLE RSSI 钳制到服务端合法范围 `[-150, 0]`。
    - 蓝牙上传 devices 已含服务端全部标准字段（address/address_type/name/is_connected/is_paired/rssi/tx_power/manufacturer_id/manufacturer_data/service_uuids/service_data/raw/rawHex/rawLength/timestamp）。
 
-3. **Core 组合 envelope 补全标准字段**（`crates/core/src/runtime.rs`、`protocol.rs`）：
-   - Wi-Fi+蓝牙组合上传（`data_type="bluetooth"`）顶层现携带 `scan_started_at`、`scan_finished_at`、`is_enabled`、`devices`、`technology`，严格满足服务端 `BluetoothData` schema；`wifi`/`bluetooth`/`captured_at_ms` 作为扩展字段保留。
-   - `normalize_protocol_data` 扩展：WiFi 数据补齐 `is_connected=false`/`dns_servers=[]` 及 network `security=[]` 默认；Bluetooth 数据补齐 `scan_started_at/scan_finished_at/is_enabled/devices` 默认，旧持久化 payload 在恢复/重发前也会被归一化。
+3. **Core 上传边界规范化**（`crates/core/src/runtime.rs`、`protocol.rs`）：
+   - Wi-Fi 与蓝牙现按各自 `data_type` 独立上传：`data_type="wifi"` 走 `WiFiData`，`data_type="bluetooth"` 走 `BluetoothData`，不再合并为一个蓝牙 envelope（服务端按 `data_type` 选 schema，合并会导致 WiFi 无法以 `wifi` 类型入库）。
+   - `normalize_protocol_data` 扩展：WiFi 数据补齐 `is_connected=false`/`dns_servers=[]` 及 network `security=[]` 默认；Bluetooth 数据补齐 `scan_started_at/scan_finished_at/is_enabled/devices` 默认，并在上传边界剥离 per-device UI 扩展（`mode`/`technology`/`rawAdvertisementSections`），旧持久化 payload 在恢复/重发前也会被归一化。
 
 4. **认证 capabilities 规范化**（`crates/core/src/worker.rs`、`transport.rs`）：Collector auth `device.capabilities` 从 `["wifi","ble","bluetooth"]` 改为 canonical `["wifi","bluetooth"]`，不再使用历史别名 `ble`。
 
@@ -56,6 +66,8 @@ Status: Implemented, source-verified, and packaged into a fresh Windows Release.
 
 ### 本轮 commit
 
+- `ac226f8` fix: upload Wi-Fi and Bluetooth as independent server envelopes
+- `5a3b693` docs: document independent Wi-Fi/Bluetooth uploads
 - `5ab59af` fix: align upload payloads with RemoteEnvServer API schema
 - `263d45d` chore: print Wi-Fi connection fields in scan example
 - `372cc34` chore: show Bluetooth address_type and service_data in scan example
