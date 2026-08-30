@@ -5,6 +5,7 @@
 ### Upload payload alignment with RemoteEnvServer API (2026-08-30)
 
 - Windows Wi-Fi upload now matches the server `WiFiData` schema completely: `interface`, `is_connected`, `gateway`, `dns_servers`, `ip_address` are filled from the live adapter via `GetAdaptersAddresses`/WLAN state when connected, and `is_connected` is only reported true when all required connection details are present; `signal_dbm` is emitted alongside `rssi`. RSSI values outside the server-valid dBm range are omitted rather than rejected.
+- Wi-Fi `security` is now populated from `WlanGetAvailableNetworkList` DOT11 auth/cipher algorithms (`OPEN`, `WEP`, `WPA`, `WPA-PSK`, `WPA2`, `WPA2-PSK`, `WPA3`, `WPA3-ENT`, `WPA3-SAE`, `OWE`, or cipher name when auth is unknown) instead of always `[]`; connection addresses reject loopback/multicast/unspecified values before upload.
 - Windows Bluetooth upload now reports real BLE `address_type` (`public`/`random` via WinRT) instead of always `unknown`; BLE `service_data` is parsed from AD types 0x16/0x20/0x21 into UUID-keyed Base64; RSSI is clamped to the server-valid range.
 - Core combined Wi-Fi+Bluetooth envelope now carries the server Bluetooth standard fields at top level: `scan_started_at`, `scan_finished_at`, `is_enabled`, `devices`, `technology` (plus extension `wifi`/`bluetooth`/`captured_at_ms`). Legacy payload normalization also fills standard Wi-Fi/Bluetooth fields before resend.
 - Collector auth `capabilities` now uses canonical values (`wifi`, `bluetooth`) instead of the legacy alias `ble`.

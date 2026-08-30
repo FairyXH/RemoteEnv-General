@@ -19,14 +19,15 @@ fn main() {
             );
             if let Some(first) = snapshot.networks.first() {
                 println!(
-                    "first network: ssid={:?}, bssid={}, rssi={:?}, signal_dbm={:?}, channel={:?}, frequency_mhz={:?}, band={:?}",
+                    "first network: ssid={:?}, bssid={}, rssi={:?}, signal_dbm={:?}, channel={:?}, frequency_mhz={:?}, band={:?}, security={:?}",
                     first.ssid,
                     first.bssid,
                     first.rssi,
                     first.signal_dbm,
                     first.channel,
                     first.frequency_mhz,
-                    first.band
+                    first.band,
+                    first.security
                 );
             }
         }
