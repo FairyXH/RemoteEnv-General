@@ -140,10 +140,7 @@ impl ServerWorker {
             status_tx,
             status,
             heartbeat_interval,
-            heartbeat_monitor: HeartbeatMonitor::new(
-                heartbeat_interval,
-                Duration::from_secs(60),
-            ),
+            heartbeat_monitor: HeartbeatMonitor::new(heartbeat_interval, Duration::from_secs(60)),
         }
     }
 
@@ -323,7 +320,7 @@ impl ServerWorker {
                         }
                         ServerEvent::SequenceRejected => {
                             if let Some((_id, envelope)) = in_flight.take() {
-                                let next = envelope.sequence.saturating_add(1);
+                                let next = (now_ms() as u64).max(envelope.sequence.saturating_add(1));
                                 self.dispatcher.rebase_target_sequences(&self.profile.id, &envelope.device_id, &envelope.data_type, next)?;
                                 self.status.last_error = Some(format!("服务器拒绝旧序号，已重置本地序号基线并准备重传: {}", value));
                                 self.refresh_counts();
@@ -388,7 +385,9 @@ where
             Message::Text(text) => {
                 return serde_json::from_str::<Value>(&text).map_err(|_| WorkerError::Protocol);
             }
-            Message::Ping(_) | Message::Pong(_) | Message::Binary(_) | Message::Frame(_) => continue,
+            Message::Ping(_) | Message::Pong(_) | Message::Binary(_) | Message::Frame(_) => {
+                continue;
+            }
             Message::Close(_) => return Err(WorkerError::Transport),
         }
     }

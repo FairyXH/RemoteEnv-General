@@ -4,6 +4,10 @@
 
 ### Phase 2 Runtime/UI stability repair (partial)
 
+- 修复服务端 `sequence_rejected`：所有 sequence 生成和恢复路径统一使用 Unix epoch milliseconds，并以持久值保证严格递增；不再使用从 `1` 开始的旧计数或仅使用 `rejected+1` 的恢复值。
+- `EnvironmentEnvelope` 的带时间构造、兼容队列 API、SQLite 序列状态和 Worker 的旧序号恢复均统一经过 Unix 毫秒下限；测试夹具不再用 `1/2` 作为有效序号。
+- 已使用 sequence 修正后的源码重新构建 Windows Release，并验证最终 Portable EXE 进程存活 5 秒；真实后端复测仍待执行。
+
 - Audited Windows/Core payloads against RemoteEnvServer `docs/api.md`: corrected Wi-Fi field names/types and band/security encoding, removed guessed security metadata, normalized Bluetooth canonical keys/technology/UUIDs, and retained Base64/HEX RAW representations. Rebuilt the Windows Tauri icon from `app/ui/res/mipmap-xxxhdpi/logo.png` into the configured multi-size `icon.ico`.
 
 - Fixed dropped lifecycle commands by using FIFO command delivery, joined Runtime/collector workers during stop, and made desktop Stop remove the complete Runtime and ServerWorkers.

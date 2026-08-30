@@ -109,13 +109,10 @@ fn snapshot_event() -> CollectorEvent {
             "interfaces": 1,
             "scan_duration_ms": 12,
             "networks": [{
-                "ssid": "fixture-wifi", "ssid_bytes_hex": null, "hidden": false,
-                "bssid": "AA:BB:CC:DD:EE:FF", "signal_strength_dbm": -42,
-                "signal_percent": 80, "channel": 36, "frequency_mhz": 5180,
-                "band": "band5_ghz", "phy_type": "802.11ac",
-                "network_type": "infrastructure",
-                "security": {"authentication": null, "encryption": null, "privacy": true},
-                "interface_id": "fixture-interface"
+                "ssid": "fixture-wifi", "hidden": false,
+                "bssid": "AA:BB:CC:DD:EE:FF", "rssi": -42,
+                "channel": 36, "frequency_mhz": 5180,
+                "band": "5ghz", "security": []
             }]
         }),
     }
@@ -181,12 +178,9 @@ async fn wifi_event_reaches_upload_delivery_and_completes() {
     };
     let scan: CollectorScan = Arc::new(|| Ok(snapshot_event()));
     let run_config = config(identity, &fixture);
-    let mut runtime = RuntimeSupervisor::start_with_collector(
-        run_config.clone(),
-        store.clone(),
-        Some(scan),
-    )
-    .unwrap();
+    let mut runtime =
+        RuntimeSupervisor::start_with_collector(run_config.clone(), store.clone(), Some(scan))
+            .unwrap();
     runtime.set_collection_running(run_config, true).unwrap();
     wait_collection_running(&runtime).await;
     fixture
@@ -195,7 +189,9 @@ async fn wifi_event_reaches_upload_delivery_and_completes() {
     let payload = fixture.received.lock().unwrap()[0].clone();
     assert_eq!(payload["data_type"], "wifi");
     assert_eq!(payload["data"]["networks"][0]["bssid"], "AA:BB:CC:DD:EE:FF");
-    let sequence = payload["sequence"].as_u64().expect("sequence must be numeric");
+    let sequence = payload["sequence"]
+        .as_u64()
+        .expect("sequence must be numeric");
     assert!(sequence > 1_000_000_000_000);
     wait_completed(&store, "wifi-runtime-device", sequence).await;
     assert!(
@@ -249,9 +245,21 @@ async fn wifi_and_bluetooth_snapshots_upload_as_one_environment_envelope() {
     let received = fixture.received.lock().unwrap().clone();
     assert_eq!(received.len(), 2);
     assert!(received.iter().all(|item| item["data_type"] == "bluetooth"));
-    assert!(received.iter().all(|item| item["data"]["devices"].is_array()));
-    assert!(received.iter().all(|item| item["data"]["wifi"]["networks"].is_array()));
-    assert!(received.iter().all(|item| item["data"]["bluetooth"]["devices"].is_array()));
+    assert!(
+        received
+            .iter()
+            .all(|item| item["data"]["devices"].is_array())
+    );
+    assert!(
+        received
+            .iter()
+            .all(|item| item["data"]["wifi"]["networks"].is_array())
+    );
+    assert!(
+        received
+            .iter()
+            .all(|item| item["data"]["bluetooth"]["devices"].is_array())
+    );
     assert!(received[1]["sequence"].as_u64().unwrap() > received[0]["sequence"].as_u64().unwrap());
     runtime.stop();
 }
@@ -272,12 +280,9 @@ async fn wifi_delivery_reconnects_with_same_sequence_and_envelope() {
     let scan: CollectorScan = Arc::new(|| Ok(snapshot_event()));
     let mut recovery_config = config(identity, &fixture);
     recovery_config.wifi_enabled = false;
-    let mut runtime = RuntimeSupervisor::start_with_collector(
-        recovery_config.clone(),
-        store.clone(),
-        Some(scan),
-    )
-    .unwrap();
+    let mut runtime =
+        RuntimeSupervisor::start_with_collector(recovery_config.clone(), store.clone(), Some(scan))
+            .unwrap();
     let running = recovery_config;
     runtime.set_collection_running(running, true).unwrap();
     fixture.ack.store(false, Ordering::SeqCst);
@@ -288,7 +293,12 @@ async fn wifi_delivery_reconnects_with_same_sequence_and_envelope() {
     let first = fixture.received.lock().unwrap()[0].clone();
     assert!(matches!(
         store
-            .delivery_status("wifi-server", "wifi-recovery-device", "wifi", first["sequence"].as_u64().unwrap())
+            .delivery_status(
+                "wifi-server",
+                "wifi-recovery-device",
+                "wifi",
+                first["sequence"].as_u64().unwrap()
+            )
             .unwrap()
             .as_deref(),
         Some("pending") | Some("in_flight")
@@ -304,10 +314,15 @@ async fn wifi_delivery_reconnects_with_same_sequence_and_envelope() {
     assert_eq!(first["data_type"], resent["data_type"]);
     assert_eq!(first["sequence"], resent["sequence"]);
     assert_eq!(first["data"], resent["data"]);
-    wait_completed(&store, "wifi-recovery-device", first["sequence"].as_u64().unwrap()).await;
-    assert_eq!(
-        store.get_sequence("wifi-recovery-device", "wifi").unwrap(),
-        Some(first["sequence"].as_u64().unwrap())
+    wait_completed(
+        &store,
+        "wifi-recovery-device",
+        first["sequence"].as_u64().unwrap(),
+    )
+    .await;
+    assert!(
+        store.get_sequence("wifi-recovery-device", "wifi").unwrap()
+            >= Some(first["sequence"].as_u64().unwrap())
     );
     runtime.stop();
 }

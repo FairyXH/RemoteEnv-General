@@ -18,13 +18,16 @@ fn sequence_is_atomic_and_survives_reopen() {
     let dir = tempdir().unwrap();
     let path = dir.path().join("state.sqlite3");
     let store = StateStore::open(&path).unwrap();
-    assert_eq!(store.next_sequence("device-a", "wifi").unwrap(), 1);
-    assert_eq!(store.next_sequence("device-a", "wifi").unwrap(), 2);
+    let first = store.next_sequence("device-a", "wifi").unwrap();
+    assert!(first >= 1_700_000_000_000);
+    let second = store.next_sequence("device-a", "wifi").unwrap();
+    assert!(second > first);
     drop(store);
     let reopened = StateStore::open(&path).unwrap();
-    assert_eq!(reopened.next_sequence("device-a", "wifi").unwrap(), 3);
+    let third = reopened.next_sequence("device-a", "wifi").unwrap();
+    assert!(third > second);
     reopened.recover_sequence("device-a", "wifi", 10).unwrap();
-    assert_eq!(reopened.next_sequence("device-a", "wifi").unwrap(), 11);
+    assert!(reopened.next_sequence("device-a", "wifi").unwrap() > third);
 }
 
 #[test]
@@ -78,7 +81,7 @@ fn queue_is_bounded_and_ack_requires_exact_identity() {
         &Ack {
             device_id: "device-b".into(),
             data_type: "wifi".into(),
-            sequence: 1
+            sequence: envelope.sequence
         },
         &envelope
     ));
@@ -86,7 +89,7 @@ fn queue_is_bounded_and_ack_requires_exact_identity() {
         &Ack {
             device_id: "device-a".into(),
             data_type: "wifi".into(),
-            sequence: 1
+            sequence: envelope.sequence
         },
         &envelope
     ));
@@ -129,7 +132,7 @@ fn queue_recovery_resets_in_flight_items() {
     let envelope = EnvironmentEnvelope::new("device-a", "wifi", 1, serde_json::json!({}));
     queue.enqueue(&envelope).unwrap();
     let claimed = queue.claim_next().unwrap().unwrap();
-    assert_eq!(claimed.envelope.sequence, 1);
+    assert!(claimed.envelope.sequence >= 1_700_000_000_000);
     queue.recover_in_flight().unwrap();
     assert_eq!(queue.pending_count().unwrap(), 1);
 }
@@ -168,7 +171,7 @@ fn runtime_assigns_sequence_and_queues_mock_event_without_claiming_real_scan() {
             data: serde_json::json!({"mock": true}),
         })
         .unwrap();
-    assert_eq!(envelope.sequence, 1);
+    assert!(envelope.sequence >= 1_700_000_000_000);
     let status = runtime.status().unwrap();
     assert_eq!(status.pending, 1);
     assert_eq!(status.in_flight, 0);
@@ -344,12 +347,22 @@ fn dispatcher_resolves_targets_and_acknowledges_only_the_selected_server() {
         },
     ];
     config.active_server_id = Some("a".into());
-    let envelope =
-        EnvironmentEnvelope::new("device-a", "wifi", 1, serde_json::json!({"mock": true}));
+    let envelope = EnvironmentEnvelope::with_timestamp(
+        "device-a",
+        "wifi",
+        1_800_000_000_000,
+        1_800_000_000_000,
+        serde_json::json!({"mock": true}),
+    );
     assert_eq!(dispatcher.persist_event(&config, &envelope).unwrap(), 1);
     config.server_mode = remote_env_core::config::ServerMode::Multi;
-    let envelope_two =
-        EnvironmentEnvelope::new("device-a", "wifi", 2, serde_json::json!({"mock": true}));
+    let envelope_two = EnvironmentEnvelope::with_timestamp(
+        "device-a",
+        "wifi",
+        1_800_000_000_001,
+        1_800_000_000_001,
+        serde_json::json!({"mock": true}),
+    );
     assert_eq!(dispatcher.persist_event(&config, &envelope_two).unwrap(), 2);
     let item = dispatcher.claim_next("b").unwrap().unwrap();
     assert!(
@@ -360,7 +373,7 @@ fn dispatcher_resolves_targets_and_acknowledges_only_the_selected_server() {
                 &Ack {
                     device_id: "device-a".into(),
                     data_type: "wifi".into(),
-                    sequence: 2
+                    sequence: item.1.sequence
                 },
                 &item.1
             )
@@ -386,7 +399,13 @@ fn dispatcher_cancels_removed_target_and_caps_retry_delay() {
         enabled: true,
     }];
     config.active_server_id = Some("removed".into());
-    let envelope = EnvironmentEnvelope::new("device-a", "wifi", 1, serde_json::json!({}));
+    let envelope = EnvironmentEnvelope::with_timestamp(
+        "device-a",
+        "wifi",
+        1_800_000_000_002,
+        1_800_000_000_002,
+        serde_json::json!({}),
+    );
     assert_eq!(dispatcher.persist_event(&config, &envelope).unwrap(), 1);
     dispatcher.cancel_target("removed").unwrap();
     assert_eq!(dispatcher.status("removed", "Stopped").unwrap().pending, 0);

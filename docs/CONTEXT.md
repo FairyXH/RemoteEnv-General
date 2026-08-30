@@ -6,7 +6,9 @@ Read this file, `ARCHITECTURE.md`, and `DEVELOPMENT.md` before changes. For tran
 
 ## Current round: RemoteEnvServer API normalization and Windows Release icon
 
-Status: Implemented, tested, and Release-verified.
+Status: Implemented, tested, and sequence-fix Release-verified.
+
+后续修正：用户反馈真实服务端返回 `sequence_rejected / sequence is not newer`。已统一所有生产 sequence 入口：`StateStore::next_sequence` 委托 Unix 毫秒分配，`EnvironmentEnvelope::with_timestamp` 也会将传入 sequence 提升到当前 Unix 毫秒下限，`sequence_rejected` 恢复使用 `max(now_ms, rejected + 1)`，旧持久状态不会回退为 1/2 等计数值。相关测试已改为验证 Unix 毫秒量级和严格递增。
 
 This round audited the active Windows/Core payload boundary against `D:\Files\Develop\Algorithm_Development\Python\RemoteEnvProject\RemoteEnvServer\docs\api.md`. Wi-Fi now serializes `rssi`, numeric `frequency_mhz`, canonical band values, and `security: string[]`; guessed nested security metadata and Windows-only fields are not uploaded. Bluetooth now uses server-compatible snake_case fields, accepted `technology` values, full 128-bit UUID strings, Base64 for binary values, and preserves diagnostic `mode` only as an extension. Sequence allocation keeps the required `max(now_ms, last+1)` monotonic semantics, and envelope timestamps use the collector event timestamp rather than a later arbitrary wall-clock value.
 
@@ -14,7 +16,11 @@ The Tauri icon was rebuilt from `app/ui/res/mipmap-xxxhdpi/logo.png` into a mult
 
 本轮最终验证：`cargo fmt --all` PASS；`cargo check --workspace` PASS；`cargo test --workspace` PASS（14 phase1 tests + 1 ignored real-backend smoke、8 phase175c、3 phase2a、3 phase2b、Windows 12 tests；缺少环境变量的 real-backend smoke 未执行）；后续补充 `cargo check --workspace` 与 Windows 12 项测试在增加 `address_type`/网络 timestamp 后仍 PASS；`app/ui` 的 `npm run build` PASS；`scripts/build-release.ps1` 正式 Windows Release PASS。最终产物：`Release/Windows/RemoteEnvCollector/RemoteEnvCollector.exe`（12,438,528 bytes）和 `Release/Windows/RemoteEnvCollector-Setup.exe`（3,101,560 bytes）。复制后的 EXE 启动并保持存活 5 秒后停止，属于进程冒烟而非完整 UI 点击验收。服务器端 Pydantic 运行时验证未执行，因为当前 Server 项目 Python 环境缺少 `fastapi` 依赖；协议字段依据已读取的 `api.md` 与 `models.py` 审查，并由本地 Rust fixtures 覆盖。
 
-本轮工作区仍包含此前已存在的 Tauri 生命周期、Core 测试和 Release 二进制变更；未回滚。API 追加修正已通过第二个源代码提交；当前仍未完成：真实 Windows Wi-Fi/Bluetooth 后端上传复测、安装包安装验收、WebView2 UI 自动点击/截图 E2E。下一步应在可用的交互式 Windows UI 自动化环境中完成这些验收；在此之前 Phase 2-C 继续保持 Partial。
+本轮工作区仍包含此前已存在的 Tauri 生命周期、Core 测试和 Release 二进制变更；未回滚。sequence 修正源代码已通过本地检查/测试，正式 Release 已重建并完成 EXE 5 秒进程冒烟；当前仍未完成：真实 Windows Wi-Fi/Bluetooth 后端上传复测、安装包安装验收、WebView2 UI 自动点击/截图 E2E。下一步应先完成真实后端复测，再在可用的交互式 Windows UI 自动化环境中完成其他验收；在此之前 Phase 2-C 继续保持 Partial。
+
+2026-08-30 sequence follow-up: 用户实际日志显示服务端拒绝旧 sequence。已修正 `StateStore::next_sequence`、`Runtime`、`EnvironmentEnvelope::with_timestamp` 和 `ServerWorker` recovery，所有新建/恢复 sequence 都至少为当前 Unix epoch milliseconds，并保持持久状态严格递增。测试 `phase1` 14 passed/1 ignored，`cargo check --workspace` passed。该修正尚需正式 Release 重建和真实后端复测。
+
+Sequence follow-up verification: `cargo check --workspace` PASS；`cargo test --workspace` PASS（phase1 14 passed/1 ignored、phase175c 8 passed、phase2a 3 passed、phase2b 3 passed、Windows 12 passed）；`app/ui` `npm run build` PASS；正式 `scripts/build-release.ps1` PASS。最终 sequence-fix Release：`Release/Windows/RemoteEnvCollector/RemoteEnvCollector.exe` 12,438,528 bytes，`Release/Windows/RemoteEnvCollector-Setup.exe` 3,101,560 bytes；EXE 启动 5 秒存活后停止。真实后端 sequence 复测尚未执行。
 
 Windows BLE observations now retain the complete AD/scan-response byte stream and serialize the server/VirEnvTester-compatible fields on each `data.devices` record: `rawHex`, `rawLength`, and `raw`, where `raw` is standard ASCII Base64. Classic Bluetooth records keep these fields absent because the native inquiry API does not provide advertisement bytes. The existing parsed fields and `rawAdvertisementSections` remain available; this change does not alter `data_type` (`bluetooth`) or the combined envelope structure.
 

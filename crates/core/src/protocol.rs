@@ -19,13 +19,29 @@ impl EnvironmentEnvelope {
         sequence: u64,
         data: Value,
     ) -> Self {
+        Self::with_timestamp(
+            device_id,
+            data_type,
+            now_ms(),
+            normalize_sequence(sequence),
+            data,
+        )
+    }
+
+    pub fn with_timestamp(
+        device_id: impl Into<String>,
+        data_type: impl Into<String>,
+        timestamp: i64,
+        sequence: u64,
+        data: Value,
+    ) -> Self {
         Self {
             r#type: "environment_data".into(),
             version: 1,
             device_id: device_id.into(),
             data_type: data_type.into(),
-            timestamp: now_ms(),
-            sequence,
+            timestamp,
+            sequence: normalize_sequence(sequence),
             data,
         }
     }
@@ -104,4 +120,8 @@ fn now_ms() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+fn normalize_sequence(sequence: u64) -> u64 {
+    (now_ms().max(0) as u64).max(sequence)
 }

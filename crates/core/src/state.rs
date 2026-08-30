@@ -24,6 +24,7 @@ impl StateStore {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, StateError> {
         let connection = Connection::open(path)?;
         connection.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS sequences (device_id TEXT NOT NULL, data_type TEXT NOT NULL, value INTEGER NOT NULL, PRIMARY KEY(device_id, data_type)); CREATE TABLE IF NOT EXISTS upload_queue (id INTEGER PRIMARY KEY AUTOINCREMENT, envelope_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', UNIQUE(envelope_json)); CREATE INDEX IF NOT EXISTS idx_upload_queue_pending ON upload_queue(status, id); CREATE TABLE IF NOT EXISTS upload_deliveries (id INTEGER PRIMARY KEY AUTOINCREMENT, target_id TEXT NOT NULL, envelope_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', UNIQUE(target_id, envelope_json)); CREATE INDEX IF NOT EXISTS idx_upload_deliveries_pending ON upload_deliveries(target_id, status, id);")?;
+        Self::normalize_legacy_sequences(&connection)?;
         Ok(Self {
             connection: Arc::new(Mutex::new(connection)),
         })
@@ -34,22 +35,7 @@ impl StateStore {
     }
 
     pub fn next_sequence(&self, device_id: &str, data_type: &str) -> Result<u64, StateError> {
-        let connection = self.lock()?;
-        let tx = connection.unchecked_transaction()?;
-        let current: Option<i64> = tx
-            .query_row(
-                "SELECT value FROM sequences WHERE device_id=?1 AND data_type=?2",
-                params![device_id, data_type],
-                |row| row.get(0),
-            )
-            .optional()?;
-        let next = current
-            .unwrap_or(0)
-            .checked_add(1)
-            .ok_or(rusqlite::Error::InvalidQuery)?;
-        tx.execute("INSERT INTO sequences(device_id,data_type,value) VALUES(?1,?2,?3) ON CONFLICT(device_id,data_type) DO UPDATE SET value=excluded.value", params![device_id, data_type, next])?;
-        tx.commit()?;
-        Ok(next as u64)
+        self.next_timestamp_sequence(device_id, data_type)
     }
 
     pub fn get_sequence(
@@ -88,11 +74,12 @@ impl StateStore {
         Ok(sequence.max(sequence_state) as u64)
     }
 
-    pub fn next_timestamp_sequence(&self, device_id: &str, data_type: &str) -> Result<u64, StateError> {
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64;
+    pub fn next_timestamp_sequence(
+        &self,
+        device_id: &str,
+        data_type: &str,
+    ) -> Result<u64, StateError> {
+        let timestamp = Self::now_ms();
         let connection = self.lock()?;
         let current: Option<i64> = connection
             .query_row(
@@ -101,26 +88,77 @@ impl StateStore {
                 |row| row.get(0),
             )
             .optional()?;
-        let latest = current.unwrap_or(0).max(timestamp as i64).saturating_add(1);
+        let latest = current.unwrap_or(0).saturating_add(1).max(timestamp as i64);
         connection.execute("INSERT INTO sequences(device_id,data_type,value) VALUES(?1,?2,?3) ON CONFLICT(device_id,data_type) DO UPDATE SET value=excluded.value", params![device_id, data_type, latest])?;
         Ok(latest as u64)
     }
 
-    pub fn rebase_target_sequences(&self, target_id: &str, device_id: &str, data_type: &str, minimum: u64) -> Result<(), StateError> {
+    pub fn rebase_target_sequences(
+        &self,
+        target_id: &str,
+        device_id: &str,
+        data_type: &str,
+        minimum: u64,
+    ) -> Result<(), StateError> {
         let c = self.lock()?;
         let mut stmt = c.prepare("SELECT id,envelope_json FROM upload_deliveries WHERE target_id=?1 AND status IN ('pending','in_flight','blocked')")?;
-        let rows = stmt.query_map(params![target_id], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?.collect::<Result<Vec<_>, _>>()?;
+        let rows = stmt
+            .query_map(params![target_id], |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
         drop(stmt);
-        let mut next = minimum;
+        let mut next = minimum.max(Self::now_ms());
         for (id, raw) in rows {
             let mut envelope: EnvironmentEnvelope = serde_json::from_str(&raw)?;
-            if envelope.device_id == device_id && envelope.data_type == data_type && envelope.sequence < next {
+            if envelope.device_id == device_id
+                && envelope.data_type == data_type
+                && envelope.sequence < next
+            {
                 envelope.sequence = next;
                 next = next.saturating_add(1);
                 c.execute("UPDATE upload_deliveries SET status='pending', envelope_json=?1 WHERE target_id=?2 AND id=?3", params![serde_json::to_string(&envelope)?, target_id, id])?;
             }
         }
         c.execute("INSERT INTO sequences(device_id,data_type,value) VALUES(?1,?2,?3) ON CONFLICT(device_id,data_type) DO UPDATE SET value=MAX(value, excluded.value)", params![device_id, data_type, next as i64])?;
+        Ok(())
+    }
+
+    fn now_ms() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64
+    }
+
+    fn normalize_legacy_sequences(connection: &Connection) -> Result<(), StateError> {
+        let floor = Self::now_ms();
+        for table in ["upload_queue", "upload_deliveries"] {
+            let query = format!(
+                "SELECT id,envelope_json FROM {table} WHERE status IN ('pending','in_flight','blocked')"
+            );
+            let mut stmt = connection.prepare(&query)?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            drop(stmt);
+            for (id, raw) in rows {
+                let mut envelope: EnvironmentEnvelope = serde_json::from_str(&raw)?;
+                if envelope.sequence < floor {
+                    envelope.sequence = floor;
+                    let update = format!(
+                        "UPDATE {table} SET envelope_json=?1, status='pending' WHERE id=?2"
+                    );
+                    connection.execute(&update, params![serde_json::to_string(&envelope)?, id])?;
+                }
+                connection.execute(
+                    "INSERT INTO sequences(device_id,data_type,value) VALUES(?1,?2,?3) ON CONFLICT(device_id,data_type) DO UPDATE SET value=MAX(value, excluded.value)",
+                    params![envelope.device_id, envelope.data_type, envelope.sequence as i64],
+                )?;
+            }
+        }
         Ok(())
     }
 
@@ -250,6 +288,7 @@ impl StateStore {
         data_type: &str,
         minimum: u64,
     ) -> Result<(), StateError> {
+        let minimum = minimum.max(Self::now_ms());
         let c = self.lock()?;
         c.execute(
             "INSERT INTO sequences(device_id,data_type,value) VALUES(?1,?2,?3) ON CONFLICT(device_id,data_type) DO UPDATE SET value=MAX(value, excluded.value)",
@@ -426,11 +465,18 @@ impl StateStore {
 
     pub fn unblock_target(&self, target_id: &str) -> Result<(), StateError> {
         let c = self.lock()?;
-        c.execute("UPDATE upload_deliveries SET status='pending' WHERE target_id=?1 AND status='blocked'", params![target_id])?;
+        c.execute(
+            "UPDATE upload_deliveries SET status='pending' WHERE target_id=?1 AND status='blocked'",
+            params![target_id],
+        )?;
         Ok(())
     }
 
-    pub fn cancel_target_except_device(&self, target_id: &str, device_id: &str) -> Result<(), StateError> {
+    pub fn cancel_target_except_device(
+        &self,
+        target_id: &str,
+        device_id: &str,
+    ) -> Result<(), StateError> {
         let c = self.lock()?;
         let rows = c
             .prepare("SELECT id,envelope_json FROM upload_deliveries WHERE target_id=?1 AND status IN ('pending','in_flight')")?
@@ -441,7 +487,10 @@ impl StateStore {
         for (id, raw) in rows {
             let envelope: EnvironmentEnvelope = serde_json::from_str(&raw)?;
             if envelope.device_id != device_id {
-                c.execute("UPDATE upload_deliveries SET status='cancelled' WHERE target_id=?1 AND id=?2", params![target_id, id])?;
+                c.execute(
+                    "UPDATE upload_deliveries SET status='cancelled' WHERE target_id=?1 AND id=?2",
+                    params![target_id, id],
+                )?;
             }
         }
         Ok(())
@@ -460,7 +509,10 @@ impl StateStore {
         for (id, raw) in rows {
             let envelope: EnvironmentEnvelope = serde_json::from_str(&raw)?;
             if envelope.device_id == device_id {
-                c.execute("UPDATE upload_deliveries SET status='cancelled' WHERE target_id=?1 AND id=?2", params![target_id, id])?;
+                c.execute(
+                    "UPDATE upload_deliveries SET status='cancelled' WHERE target_id=?1 AND id=?2",
+                    params![target_id, id],
+                )?;
             }
         }
         Ok(())

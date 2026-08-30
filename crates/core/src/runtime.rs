@@ -53,22 +53,19 @@ fn persist_latest_events(
         let device_id = config.identity.device_id.clone();
         let captured_at_ms = wifi.timestamp_ms.max(bluetooth.timestamp_ms);
         let sequence = store.next_timestamp_sequence(&device_id, "bluetooth")?;
-        let envelope = EnvironmentEnvelope {
-            timestamp: captured_at_ms,
+        let envelope = EnvironmentEnvelope::with_timestamp(
+            device_id,
+            "bluetooth",
+            captured_at_ms,
             sequence,
-            ..EnvironmentEnvelope::new(
-                device_id,
-                "bluetooth",
-                sequence,
-                serde_json::json!({
-                    "captured_at_ms": captured_at_ms,
-                    "devices": bluetooth.data["devices"],
-                    "technology": bluetooth.data["technology"].clone(),
-                    "wifi": wifi.data,
-                    "bluetooth": bluetooth.data,
-                }),
-            )
-        };
+            serde_json::json!({
+                "captured_at_ms": captured_at_ms,
+                "devices": bluetooth.data["devices"],
+                "technology": bluetooth.data["technology"].clone(),
+                "wifi": wifi.data,
+                "bluetooth": bluetooth.data,
+            }),
+        );
         dispatcher.persist_event(config, &envelope)?;
         return Ok(());
     }
@@ -76,11 +73,13 @@ fn persist_latest_events(
         let device_id = config.identity.device_id.clone();
         let timestamp = event.timestamp_ms.max(1);
         let sequence = store.next_timestamp_sequence(&device_id, &event.data_type)?;
-        let envelope = EnvironmentEnvelope {
+        let envelope = EnvironmentEnvelope::with_timestamp(
+            device_id,
+            event.data_type,
             timestamp,
             sequence,
-            ..EnvironmentEnvelope::new(device_id, event.data_type, sequence, event.data)
-        };
+            event.data,
+        );
         dispatcher.persist_event(config, &envelope)?;
     }
     Ok(())
@@ -641,10 +640,11 @@ impl Runtime {
     ) -> Result<EnvironmentEnvelope, RuntimeError> {
         let sequence = self
             .store
-            .next_sequence(&self.device_id, &event.data_type)?;
-        let envelope = EnvironmentEnvelope::new(
+            .next_timestamp_sequence(&self.device_id, &event.data_type)?;
+        let envelope = EnvironmentEnvelope::with_timestamp(
             self.device_id.clone(),
             event.data_type,
+            event.timestamp_ms.max(1),
             sequence,
             event.data,
         );
