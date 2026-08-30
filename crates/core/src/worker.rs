@@ -207,7 +207,7 @@ impl ServerWorker {
         let auth = AuthFrame::collector(
             &self.profile.token,
             &self.identity,
-            vec!["wifi".into(), "ble".into(), "bluetooth".into()],
+            vec!["wifi".into(), "bluetooth".into()],
         );
         socket
             .send(Message::Text(

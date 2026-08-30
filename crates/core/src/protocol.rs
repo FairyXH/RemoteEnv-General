@@ -125,9 +125,38 @@ pub fn matches_ack(ack: &Ack, envelope: &EnvironmentEnvelope) -> bool {
 }
 
 fn normalize_protocol_data(data_type: &str, data: &mut Value) {
-    if data_type != "bluetooth" || !data.is_object() {
+    if !data.is_object() {
         return;
     }
+    match data_type {
+        "wifi" => normalize_wifi_data(data),
+        "bluetooth" => normalize_bluetooth_data(data),
+        _ => {}
+    }
+}
+
+fn normalize_wifi_data(data: &mut Value) {
+    let object = data.as_object_mut().expect("wifi data is object");
+    // The server schema treats is_connected=false as the safe default and
+    // requires connection details only when true.
+    object.entry("is_connected").or_insert(Value::Bool(false));
+    object
+        .entry("dns_servers")
+        .or_insert_with(|| Value::Array(Vec::new()));
+    if let Some(networks) = object.get_mut("networks") {
+        if let Some(entries) = networks.as_array_mut() {
+            for entry in entries {
+                if let Some(record) = entry.as_object_mut() {
+                    record
+                        .entry("security")
+                        .or_insert_with(|| Value::Array(Vec::new()));
+                }
+            }
+        }
+    }
+}
+
+fn normalize_bluetooth_data(data: &mut Value) {
     if data.get("technology").and_then(Value::as_str) == Some("bluetooth") {
         data["technology"] = Value::String("unknown".into());
     }
@@ -136,6 +165,15 @@ fn normalize_protocol_data(data_type: &str, data: &mut Value) {
             nested["technology"] = Value::String("unknown".into());
         }
     }
+    // The server schema includes these standard fields for combined envelopes
+    // and standalone Bluetooth payloads; keep them explicit for old rows.
+    let object = data.as_object_mut().expect("bluetooth data is object");
+    object.entry("scan_started_at").or_insert(Value::Null);
+    object.entry("scan_finished_at").or_insert(Value::Null);
+    object.entry("is_enabled").or_insert(Value::Null);
+    object
+        .entry("devices")
+        .or_insert_with(|| Value::Array(Vec::new()));
 }
 
 fn now_ms() -> i64 {

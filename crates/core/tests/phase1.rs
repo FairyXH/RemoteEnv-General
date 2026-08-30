@@ -131,6 +131,22 @@ fn protocol_serializes_server_envelope_and_classifies_sequence_error() {
         serde_json::json!({"technology": "bluetooth", "devices": []}),
     );
     assert_eq!(bluetooth.data["technology"], "unknown");
+    assert_eq!(bluetooth.data["scan_started_at"], serde_json::Value::Null);
+    assert_eq!(bluetooth.data["scan_finished_at"], serde_json::Value::Null);
+    assert_eq!(bluetooth.data["is_enabled"], serde_json::Value::Null);
+
+    let wifi = EnvironmentEnvelope::with_timestamp(
+        "device-a",
+        "wifi",
+        1_800_000_000_000,
+        1_800_000_000_001,
+        serde_json::json!({
+            "networks": [{"bssid": "AA:BB:CC:DD:EE:FF", "rssi": -42}]
+        }),
+    );
+    assert_eq!(wifi.data["is_connected"], false);
+    assert_eq!(wifi.data["dns_servers"], serde_json::json!([]));
+    assert_eq!(wifi.data["networks"][0]["security"], serde_json::json!([]));
 }
 
 #[test]

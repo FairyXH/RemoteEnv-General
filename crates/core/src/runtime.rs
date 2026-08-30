@@ -57,6 +57,21 @@ fn persist_latest_events(
         if data["technology"] == serde_json::Value::String("bluetooth".into()) {
             data["technology"] = serde_json::Value::String("unknown".into());
         }
+        let scan_started_at = bluetooth
+            .data
+            .get("scan_started_at")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        let scan_finished_at = bluetooth
+            .data
+            .get("scan_finished_at")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        let is_enabled = bluetooth
+            .data
+            .get("is_enabled")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
         let envelope = EnvironmentEnvelope::with_timestamp(
             device_id,
             "bluetooth",
@@ -64,6 +79,9 @@ fn persist_latest_events(
             sequence,
             serde_json::json!({
                 "captured_at_ms": captured_at_ms,
+                "scan_started_at": scan_started_at,
+                "scan_finished_at": scan_finished_at,
+                "is_enabled": is_enabled,
                 "devices": bluetooth.data["devices"],
                 "technology": data["technology"].clone(),
                 "wifi": wifi.data,

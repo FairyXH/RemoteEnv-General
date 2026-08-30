@@ -38,10 +38,7 @@ impl WebSocketManager {
         Self {
             state: ConnectionState::Disconnected,
             backoff: Backoff::new(1, 60),
-            heartbeat: HeartbeatMonitor::new(
-                HEARTBEAT_INTERVAL,
-                Duration::from_secs(60),
-            ),
+            heartbeat: HeartbeatMonitor::new(HEARTBEAT_INTERVAL, Duration::from_secs(60)),
         }
     }
 
@@ -67,11 +64,7 @@ impl WebSocketManager {
         self.state = ConnectionState::Connecting;
         let (mut socket, _) = connect_async(server_url).await?;
         self.state = ConnectionState::Connected;
-        let auth = AuthFrame::collector(
-            token,
-            identity,
-            vec!["wifi".into(), "ble".into(), "bluetooth".into()],
-        );
+        let auth = AuthFrame::collector(token, identity, vec!["wifi".into(), "bluetooth".into()]);
         socket
             .send(Message::Text(serde_json::to_string(&auth)?.into()))
             .await?;
@@ -114,9 +107,16 @@ impl WebSocketManager {
                         })??;
                         let value: Value = match message {
                             Message::Text(text) => serde_json::from_str(&text)?,
-                            Message::Ping(payload) => { socket.send(Message::Pong(payload)).await?; continue; }
+                            Message::Ping(payload) => {
+                                socket.send(Message::Pong(payload)).await?;
+                                continue;
+                            }
                             Message::Pong(_) | Message::Binary(_) | Message::Frame(_) => continue,
-                            Message::Close(_) => return Err(WebSocketError::Authentication("connection closed while uploading".into())),
+                            Message::Close(_) => {
+                                return Err(WebSocketError::Authentication(
+                                    "connection closed while uploading".into(),
+                                ));
+                            }
                         };
                         match classify_server_message(
                             value["type"].as_str().unwrap_or_default(),
@@ -209,15 +209,20 @@ where
     S::Item: Into<Result<Message, tokio_tungstenite::tungstenite::Error>>,
 {
     loop {
-        let frame = socket
-            .next()
-            .await
-            .ok_or_else(|| WebSocketError::Authentication(format!("connection closed before {expected}")))??;
+        let frame = socket.next().await.ok_or_else(|| {
+            WebSocketError::Authentication(format!("connection closed before {expected}"))
+        })??;
         match frame {
             Message::Text(text) => return Ok(serde_json::from_str(&text)?),
-            Message::Ping(payload) => { socket.send(Message::Pong(payload)).await?; }
+            Message::Ping(payload) => {
+                socket.send(Message::Pong(payload)).await?;
+            }
             Message::Pong(_) | Message::Binary(_) | Message::Frame(_) => {}
-            Message::Close(_) => return Err(WebSocketError::Authentication(format!("connection closed before {expected}"))),
+            Message::Close(_) => {
+                return Err(WebSocketError::Authentication(format!(
+                    "connection closed before {expected}"
+                )));
+            }
         }
     }
 }

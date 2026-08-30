@@ -9,6 +9,7 @@ use windows::Devices::Bluetooth::Advertisement::{
     BluetoothLEAdvertisementReceivedEventArgs, BluetoothLEAdvertisementWatcher,
     BluetoothLEScanningMode,
 };
+use windows::Devices::Bluetooth::BluetoothAddressType;
 use windows::Foundation::TypedEventHandler;
 use windows::Storage::Streams::DataReader;
 use windows::core::GUID;
@@ -47,6 +48,40 @@ fn guid_string(guid: GUID) -> String {
 
 fn bluetooth_uuid16(value: u16) -> String {
     format!("0000{value:04X}-0000-1000-8000-00805F9B34FB")
+}
+
+fn bluetooth_uuid32(value: u32) -> String {
+    format!("{value:08X}-0000-1000-8000-00805F9B34FB")
+}
+
+fn bluetooth_uuid128(value: u128) -> String {
+    let hex = format!("{value:032X}");
+    format!(
+        "{}-{}-{}-{}-{}",
+        &hex[0..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..32]
+    )
+}
+
+fn address_type_text(value: Option<BluetoothAddressType>) -> String {
+    match value {
+        Some(BluetoothAddressType::Public) => "public".into(),
+        Some(BluetoothAddressType::Random) => "random".into(),
+        _ => "unknown".into(),
+    }
+}
+
+/// The server validates BLE RSSI as dBm in [-150, 0]; WinRT reports dBm but
+/// some radios expose out-of-range values that must not be uploaded as-is.
+fn normalize_rssi(value: f64) -> Option<f64> {
+    if (-150.0..=0.0).contains(&value) {
+        Some(value)
+    } else {
+        None
+    }
 }
 
 pub fn parse_advertisement(raw: &[u8]) -> BleAdvertisement {
@@ -186,6 +221,7 @@ impl BleScanner for NativeBleScanner {
             };
             let mut raw_advertisement_sections = Vec::new();
             let mut raw_advertisement = Vec::new();
+            let mut service_data = Vec::new();
             if let Ok(sections) = advertisement.DataSections() {
                 for index in 0..sections.Size()? {
                     let Ok(section) = sections.GetAt(index) else {
@@ -197,6 +233,32 @@ impl BleScanner for NativeBleScanner {
                     let Ok(data) = read_buffer(buffer) else {
                         continue;
                     };
+                    // Service Data AD types: 16-bit, 32-bit, and 128-bit UUIDs.
+                    match (ad_type, data.len()) {
+                        (0x16, len) if len >= 2 => {
+                            service_data.push(remote_env_core::bluetooth::ServiceData {
+                                uuid: bluetooth_uuid16(u16::from_le_bytes([data[0], data[1]])),
+                                data: data[2..].to_vec(),
+                            });
+                        }
+                        (0x20, len) if len >= 4 => {
+                            service_data.push(remote_env_core::bluetooth::ServiceData {
+                                uuid: bluetooth_uuid32(u32::from_le_bytes([
+                                    data[0], data[1], data[2], data[3],
+                                ])),
+                                data: data[4..].to_vec(),
+                            });
+                        }
+                        (0x21, len) if len >= 16 => {
+                            service_data.push(remote_env_core::bluetooth::ServiceData {
+                                uuid: bluetooth_uuid128(u128::from_le_bytes(
+                                    data[..16].try_into().unwrap_or_default(),
+                                )),
+                                data: data[16..].to_vec(),
+                            });
+                        }
+                        _ => {}
+                    }
                     let length = data.len().saturating_add(1);
                     if length <= u8::MAX as usize {
                         raw_advertisement.push(length as u8);
@@ -212,17 +274,21 @@ impl BleScanner for NativeBleScanner {
             }
             let event = BluetoothObservation {
                 address: format_bluetooth_address(args.BluetoothAddress()?),
-                address_type: "unknown".into(),
+                address_type: address_type_text(args.BluetoothAddressType().ok()),
                 transport: BluetoothTransport::Ble,
                 name: advertisement
                     .LocalName()
                     .ok()
                     .map(|value| value.to_string_lossy())
                     .filter(|value| !value.is_empty()),
-                rssi: args.RawSignalStrengthInDBm().ok().map(f64::from),
+                rssi: args
+                    .RawSignalStrengthInDBm()
+                    .ok()
+                    .map(f64::from)
+                    .and_then(normalize_rssi),
                 service_uuids,
                 manufacturer_data,
-                service_data: Vec::new(),
+                service_data,
                 raw_advertisement_sections,
                 raw_advertisement: (!raw_advertisement.is_empty()).then_some(raw_advertisement),
                 connectable: args.IsConnectable().ok(),
@@ -299,5 +365,32 @@ mod tests {
             event["observations"][0]["raw_advertisement_sections"][0]["data_hex"],
             "DEADBE"
         );
+    }
+    #[test]
+    fn service_data_uuids_match_server_uuid_shape() {
+        assert_eq!(
+            bluetooth_uuid16(0xFEAA),
+            "0000FEAA-0000-1000-8000-00805F9B34FB"
+        );
+        assert_eq!(
+            bluetooth_uuid32(0xDEADBEEF),
+            "DEADBEEF-0000-1000-8000-00805F9B34FB"
+        );
+        assert_eq!(
+            bluetooth_uuid128(0x123456789ABCDEF00112233445566778),
+            "12345678-9ABC-DEF0-0112-233445566778"
+        );
+        assert_eq!(
+            address_type_text(Some(BluetoothAddressType::Public)),
+            "public"
+        );
+        assert_eq!(
+            address_type_text(Some(BluetoothAddressType::Random)),
+            "random"
+        );
+        assert_eq!(address_type_text(None), "unknown");
+        assert_eq!(normalize_rssi(-61.0), Some(-61.0));
+        assert_eq!(normalize_rssi(0.0), Some(0.0));
+        assert_eq!(normalize_rssi(55.0), None);
     }
 }

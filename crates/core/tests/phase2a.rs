@@ -108,9 +108,15 @@ fn snapshot_event() -> CollectorEvent {
         data: serde_json::json!({
             "interfaces": 1,
             "scan_duration_ms": 12,
+            "interface": "WLAN",
+            "is_connected": false,
+            "gateway": null,
+            "dns_servers": [],
+            "ip_address": null,
             "networks": [{
                 "ssid": "fixture-wifi", "hidden": false,
                 "bssid": "AA:BB:CC:DD:EE:FF", "rssi": -42,
+                "signal_dbm": -42,
                 "channel": 36, "frequency_mhz": 5180,
                 "band": "5ghz", "security": []
             }]
@@ -224,6 +230,10 @@ async fn wifi_and_bluetooth_snapshots_upload_as_one_environment_envelope() {
             data_type: "bluetooth".into(),
             timestamp_ms: 2,
             data: serde_json::json!({
+                "scan_started_at": 1,
+                "scan_finished_at": 2,
+                "technology": "unknown",
+                "is_enabled": true,
                 "devices": [{"address": "AA:BB:CC:DD:EE:01", "mode": "ble"}],
                 "ble_available": true,
                 "classic_available": true,
@@ -259,6 +269,31 @@ async fn wifi_and_bluetooth_snapshots_upload_as_one_environment_envelope() {
         received
             .iter()
             .all(|item| item["data"]["bluetooth"]["devices"].is_array())
+    );
+    assert!(
+        received
+            .iter()
+            .all(|item| item["data"]["wifi"]["is_connected"] == false)
+    );
+    assert!(
+        received
+            .iter()
+            .all(|item| item["data"]["wifi"]["dns_servers"].is_array())
+    );
+    assert!(
+        received
+            .iter()
+            .all(|item| item["data"]["scan_started_at"] == 1)
+    );
+    assert!(
+        received
+            .iter()
+            .all(|item| item["data"]["scan_finished_at"] == 2)
+    );
+    assert!(
+        received
+            .iter()
+            .all(|item| item["data"]["is_enabled"] == true)
     );
     assert!(received[1]["sequence"].as_u64().unwrap() > received[0]["sequence"].as_u64().unwrap());
     runtime.stop();

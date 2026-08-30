@@ -22,6 +22,8 @@ pub struct WiFiObservation {
     pub bssid: String,
     #[serde(rename = "rssi")]
     pub rssi: Option<f64>,
+    /// Server-canonical signal strength field; equals RSSI in dBm when available.
+    pub signal_dbm: Option<f64>,
     #[serde(skip_serializing)]
     pub signal_percent: Option<u8>,
     pub channel: Option<u16>,
@@ -46,6 +48,21 @@ pub struct WiFiSnapshot {
     pub interfaces: usize,
     #[serde(skip_serializing)]
     pub scan_duration_ms: u64,
+    /// Server-canonical interface description (e.g. WLAN adapter name).
+    #[serde(skip_serializing)]
+    pub interface: Option<String>,
+    /// Whether the WLAN adapter currently has an active connection.
+    #[serde(skip_serializing)]
+    pub is_connected: bool,
+    /// Default gateway of the connected WLAN adapter, if known.
+    #[serde(skip_serializing)]
+    pub gateway: Option<String>,
+    /// DNS servers configured on the connected WLAN adapter, if known.
+    #[serde(skip_serializing)]
+    pub dns_servers: Vec<String>,
+    /// Primary IPv4/IPv6 address of the connected WLAN adapter, if known.
+    #[serde(skip_serializing)]
+    pub ip_address: Option<String>,
 }
 
 pub(crate) fn decode_ssid(bytes: &[u8]) -> (Option<String>, Option<String>, bool) {
