@@ -63,7 +63,7 @@ fn persist_latest_events(
                 serde_json::json!({
                     "captured_at_ms": captured_at_ms,
                     "devices": bluetooth.data["devices"],
-                    "technology": "bluetooth_classic",
+                    "technology": bluetooth.data["technology"].clone(),
                     "wifi": wifi.data,
                     "bluetooth": bluetooth.data,
                 }),

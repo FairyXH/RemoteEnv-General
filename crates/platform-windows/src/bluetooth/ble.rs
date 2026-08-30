@@ -212,6 +212,7 @@ impl BleScanner for NativeBleScanner {
             }
             let event = BluetoothObservation {
                 address: format_bluetooth_address(args.BluetoothAddress()?),
+                address_type: "unknown".into(),
                 transport: BluetoothTransport::Ble,
                 name: advertisement
                     .LocalName()

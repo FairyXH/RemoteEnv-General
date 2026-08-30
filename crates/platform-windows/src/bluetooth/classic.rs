@@ -73,6 +73,7 @@ impl ClassicBluetoothScanner for NativeClassicBluetoothScanner {
                     let address = unsafe { info.Address.Anonymous.ullLong };
                     result.push(BluetoothObservation {
                         address: format_bluetooth_address(address),
+                        address_type: "unknown".into(),
                         transport: BluetoothTransport::Classic,
                         name: (!name.is_empty()).then_some(name),
                         rssi: None,

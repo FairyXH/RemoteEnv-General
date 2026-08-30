@@ -20,11 +20,11 @@ pub fn merge_observations(
     });
     let mut merged: Vec<BluetoothObservation> = Vec::new();
     for item in observations {
-        let same_key = |existing: &BluetoothObservation| {
-            existing.address == item.address
-                && (allow_cross_transport_merge || existing.transport == item.transport)
-        };
-        if let Some(existing) = merged.iter_mut().find(|value| same_key(value)) {
+        if let Some(existing) = merged.iter_mut().find(|value| {
+            value.address == item.address
+                && value.address_type == item.address_type
+                && (allow_cross_transport_merge || value.transport == item.transport)
+        }) {
             if item.timestamp_ms >= existing.timestamp_ms {
                 if item.name.is_some() {
                     existing.name = item.name;

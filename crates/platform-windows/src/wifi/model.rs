@@ -34,6 +34,7 @@ pub struct WiFiObservation {
     /// WLAN_BSS_ENTRY does not expose negotiated security suites. Do not
     /// infer WPA/OPEN from the privacy bit; emit an empty standard list.
     pub security: Vec<String>,
+    pub timestamp: i64,
     #[serde(skip_serializing)]
     pub interface_id: String,
 }

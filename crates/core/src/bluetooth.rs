@@ -30,6 +30,7 @@ pub struct RawAdvertisementSection {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BluetoothObservation {
     pub address: String,
+    pub address_type: String,
     pub transport: BluetoothTransport,
     pub name: Option<String>,
     pub rssi: Option<f64>,

@@ -89,15 +89,13 @@ impl<B: BleScanner + 'static, C: ClassicBluetoothScanner + 'static> BluetoothCol
                 };
                 serde_json::json!({
                     "address": observation.address,
-                    "address_type": "unknown",
+                    "address_type": observation.address_type,
                     "name": observation.name,
                     "rssi": observation.rssi,
                     "technology": technology,
                     "mode": mode,
-
                     "is_connected": Value::Null,
                     "is_paired": Value::Null,
-                    "classOfDevice": observation.class_of_device,
                     "tx_power": observation.tx_power,
                     "manufacturer_id": observation.manufacturer_data.first().map(|item| item.company_id),
                     "manufacturer_data": observation.manufacturer_data.first().map(|item| base64_encode(&item.data)),
@@ -107,15 +105,14 @@ impl<B: BleScanner + 'static, C: ClassicBluetoothScanner + 'static> BluetoothCol
                     "rawHex": observation.raw_advertisement.as_ref().map(|value| hex_encode(value)),
                     "rawLength": observation.raw_advertisement.as_ref().map(Vec::len),
                     "raw": observation.raw_advertisement.as_ref().map(|value| base64_encode(value)),
-                    "connectable": observation.connectable,
-                    "appearance": observation.appearance,
                     "timestamp": observation.timestamp_ms,
                 })
             })
             .collect();
+        let capture_time = now_ms();
         let data = serde_json::json!({
-            "scan_started_at": now_ms().saturating_sub(snapshot.scan_duration_ms as i64),
-            "scan_finished_at": now_ms(),
+            "scan_started_at": capture_time.saturating_sub(snapshot.scan_duration_ms as i64).max(1),
+            "scan_finished_at": capture_time,
             "technology": if snapshot.ble_available && !snapshot.classic_available {
                 "ble"
             } else if snapshot.classic_available && !snapshot.ble_available {
@@ -210,6 +207,7 @@ mod tests {
     fn obs(transport: BluetoothTransport, timestamp_ms: i64) -> BluetoothObservation {
         BluetoothObservation {
             address: "AA:BB:CC:DD:EE:01".into(),
+            address_type: "unknown".into(),
             transport,
             name: None,
             rssi: None,

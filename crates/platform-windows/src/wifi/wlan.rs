@@ -4,7 +4,7 @@ use super::model::{
     format_bssid,
 };
 use std::ptr::null_mut;
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::NetworkManagement::WiFi::{
     WLAN_BSS_LIST, WlanCloseHandle, WlanEnumInterfaces, WlanFreeMemory, WlanGetNetworkBssList,
@@ -84,6 +84,10 @@ unsafe fn enumerate(handle: HANDLE, started: Instant) -> Result<WiFiSnapshot, Wi
             let entry = &*entry_base.add(item);
             let length = (entry.dot11Ssid.uSSIDLength as usize).min(entry.dot11Ssid.ucSSID.len());
             let (ssid, raw, hidden) = decode_ssid(&entry.dot11Ssid.ucSSID[..length]);
+            let timestamp = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as i64;
             let frequency = (entry.ulChCenterFrequency > 0)
                 .then_some((entry.ulChCenterFrequency / 1000) as f64);
             networks.push(WiFiObservation {
@@ -99,6 +103,7 @@ unsafe fn enumerate(handle: HANDLE, started: Instant) -> Result<WiFiSnapshot, Wi
                 phy_type: Some(format!("{}", entry.dot11BssPhyType)),
                 network_type: None,
                 security: Vec::new(),
+                timestamp,
                 interface_id: interface_id.clone(),
             });
         }
