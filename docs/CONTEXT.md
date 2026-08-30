@@ -4,9 +4,66 @@
 
 Read this file, `ARCHITECTURE.md`, and `DEVELOPMENT.md` before changes. For transport work also read `PROTOCOL.md` and `WEBSOCKET.md`.
 
-## Current round: RemoteEnvServer API normalization and Windows Release icon
+## Current round: Upload payload alignment with RemoteEnvServer API (2026-08-30)
 
-Status: Implemented and locally tested; this `technology=bluetooth` compatibility fix is source-verified, but a fresh Release rebuild is still pending.
+Status: Implemented, source-verified, and packaged into a fresh Windows Release.
+
+本轮核心目标是把 Core/Windows 上传数据结构严格对齐服务端 API（`RemoteEnvServer/remote_env_server/models.py` + `docs/api.md`）。此前 Windows Wi-Fi 上传只发送 `scan_started_at/scan_finished_at/networks`，缺少服务端标准字段；蓝牙 `address_type` 恒为 `unknown`、BLE `service_data` 从未解析；Wi-Fi+蓝牙组合 envelope 顶层缺少 Bluetooth schema 标准字段。
+
+### 本轮完成
+
+1. **Windows Wi-Fi 上传补全标准字段**（`crates/platform-windows/src/wifi/wlan.rs`、`model.rs`、`collector.rs`）：
+   - 顶层 `WiFiData` 现包含 `interface`、`is_connected`、`gateway`、`dns_servers`、`ip_address`。
+   - 使用 `GetAdaptersAddresses`（IpHelper，`IF_TYPE_IEEE80211` 过滤 + WLAN 接口 GUID 匹配 AdapterName/NetworkGuid）采集活动 Wi-Fi 适配器的 IP/网关/DNS。
+   - `is_connected` 仅在连接详情（gateway+ip_address）齐全时报告 true；否则如实报告 false，避免服务端 `connected WiFi data requires gateway, dns_servers, and ip_address` 校验拒绝。
+   - 每个 network 增加服务端标准字段 `signal_dbm`（与 `rssi` 同为 dBm）；RSSI 钳制到服务端合法范围 `[-150, 0]`，超出置空。
+   - `Cargo.toml` 增加 windows-sys features：`Win32_NetworkManagement_IpHelper`、`Win32_NetworkManagement_Ndis`、`Win32_Networking_WinSock`。
+
+2. **Windows 蓝牙补全标准字段**（`crates/platform-windows/src/bluetooth/ble.rs`、`collector.rs`）：
+   - BLE `address_type` 从 WinRT `BluetoothAddressType()` 读取真实值 `public`/`random`，仅 API 无法分类时回退 `unknown`（服务端 Literal 允许 `public/random/static_random/unknown`）。
+   - BLE `service_data` 从 AD types `0x16`(16-bit)/`0x20`(32-bit)/`0x21`(128-bit) 解析为 UUID-keyed Base64。
+   - BLE RSSI 钳制到服务端合法范围 `[-150, 0]`。
+   - 蓝牙上传 devices 已含服务端全部标准字段（address/address_type/name/is_connected/is_paired/rssi/tx_power/manufacturer_id/manufacturer_data/service_uuids/service_data/raw/rawHex/rawLength/timestamp）。
+
+3. **Core 组合 envelope 补全标准字段**（`crates/core/src/runtime.rs`、`protocol.rs`）：
+   - Wi-Fi+蓝牙组合上传（`data_type="bluetooth"`）顶层现携带 `scan_started_at`、`scan_finished_at`、`is_enabled`、`devices`、`technology`，严格满足服务端 `BluetoothData` schema；`wifi`/`bluetooth`/`captured_at_ms` 作为扩展字段保留。
+   - `normalize_protocol_data` 扩展：WiFi 数据补齐 `is_connected=false`/`dns_servers=[]` 及 network `security=[]` 默认；Bluetooth 数据补齐 `scan_started_at/scan_finished_at/is_enabled/devices` 默认，旧持久化 payload 在恢复/重发前也会被归一化。
+
+4. **认证 capabilities 规范化**（`crates/core/src/worker.rs`、`transport.rs`）：Collector auth `device.capabilities` 从 `["wifi","ble","bluetooth"]` 改为 canonical `["wifi","bluetooth"]`，不再使用历史别名 `ble`。
+
+### 验证结果
+
+- `cargo fmt --all -- --check`：PASS。
+- `cargo check --workspace`：PASS。
+- `cargo test --workspace`：PASS。计数：Core 2 unit、phase1 14 passed/1 ignored（real-backend smoke 忽略）、phase175c 9、phase2a 3、phase2b 3；Windows 14（新增 WiFi 连接字段、BLE service_data/address_type/rssi 回归）。
+- `app/ui` `npm run build`：PASS。
+- 服务端 Pydantic schema 真实校验（直接加载 `RemoteEnvServer/remote_env_server/models.py`，7/7 PASS）：WiFi disconnected/connected 均接受、connected 缺 gateway 拒绝、Bluetooth 标准 payload 接受、组合 envelope 接受、非法 `technology="bluetooth"` 与非法 `address_type` 拒绝。临时脚本已删除。
+- 真实硬件：`windows_wifi_scan` example 返回 `interface: Some("AIC8800D80 USB WiFi")`, `is_connected: false`（本机未连接 Wi-Fi，符合服务端不伪造连接详情的要求），network 含 `rssi=-77`, `signal_dbm=-77`, `channel=40`, `frequency_mhz=5200`, `band=5ghz`。`windows_bluetooth_scan` example 返回 BLE=3、Classic=3、首个设备 `address_type=public`、`rssi=-56`。
+- 正式 Release：`scripts/build-release.ps1` PASS。产物：`Release/Windows/RemoteEnvCollector/RemoteEnvCollector.exe`（12,509,696 bytes）、`Release/Windows/RemoteEnvCollector-Setup.exe`（3,104,851 bytes）。EXE 启动存活 6 秒后停止（进程冒烟，非 UI 点击 E2E）。
+
+### 当前限制 / 未完成
+
+- 真实后端（用户提供的 WSS + Token）上传复测仍未执行；本轮以服务端 models.py 的真实 Pydantic 校验替代，但没有服务端进程/网络证据。
+- 打包后 UI 按钮点击 E2E（Start/Stop/服务器管理/详情）仍未完成；无 WebView2 自动点击环境。
+- Windows 平台安全套件（`security`）仍为空数组：WLAN BSS API 不暴露协商套件，文档注释明确不从 privacy bit 推断。
+- Classic Bluetooth 无 RSSI/RAW/service data：原生 inquiry API 不提供，保持字段缺省（服务端接受 null/空）。
+
+### 下一步
+
+1. 使用用户提供的真实后端凭据（仅进程环境变量注入）复测 Wi-Fi/蓝牙上传与 ACK，确认服务端实际接受新 payload。
+2. 在交互式桌面会话中完成打包 UI 点击验收。
+3. 之后可进入下一 Phase（Android/Linux/macOS 采集器按需开发）。
+
+### 本轮 commit
+
+- `5ab59af` fix: align upload payloads with RemoteEnvServer API schema
+- `263d45d` chore: print Wi-Fi connection fields in scan example
+- `372cc34` chore: show Bluetooth address_type and service_data in scan example
+
+### 工作区状态
+
+- 本轮修改已提交；工作区仍有此前已存在的未提交改动：`app/desktop/src-tauri/src/lib.rs`、`crates/core/src/config.rs`、`crates/core/tests/phase2b.rs`（部分内容）、`Release/Windows/*` 二进制（Release 构建重生成）。未回滚、未提交无关内容。
+
 
 后续修正：用户反馈真实服务端返回 `sequence_rejected / sequence is not newer`。已统一所有生产 sequence 入口：`StateStore::next_sequence` 委托 Unix 毫秒分配，`EnvironmentEnvelope::with_timestamp` 也会将传入 sequence 提升到当前 Unix 毫秒下限，`sequence_rejected` 恢复使用 `max(now_ms, rejected + 1)`，旧持久状态不会回退为 1/2 等计数值。相关测试已改为验证 Unix 毫秒量级和严格递增。
 

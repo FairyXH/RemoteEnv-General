@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Upload payload alignment with RemoteEnvServer API (2026-08-30)
+
+- Windows Wi-Fi upload now matches the server `WiFiData` schema completely: `interface`, `is_connected`, `gateway`, `dns_servers`, `ip_address` are filled from the live adapter via `GetAdaptersAddresses`/WLAN state when connected, and `is_connected` is only reported true when all required connection details are present; `signal_dbm` is emitted alongside `rssi`. RSSI values outside the server-valid dBm range are omitted rather than rejected.
+- Windows Bluetooth upload now reports real BLE `address_type` (`public`/`random` via WinRT) instead of always `unknown`; BLE `service_data` is parsed from AD types 0x16/0x20/0x21 into UUID-keyed Base64; RSSI is clamped to the server-valid range.
+- Core combined Wi-Fi+Bluetooth envelope now carries the server Bluetooth standard fields at top level: `scan_started_at`, `scan_finished_at`, `is_enabled`, `devices`, `technology` (plus extension `wifi`/`bluetooth`/`captured_at_ms`). Legacy payload normalization also fills standard Wi-Fi/Bluetooth fields before resend.
+- Collector auth `capabilities` now uses canonical values (`wifi`, `bluetooth`) instead of the legacy alias `ble`.
+- Verified: `cargo fmt --all -- --check` PASS, `cargo check --workspace` PASS, `cargo test --workspace` PASS (Core 2 unit + 14 phase1 + 1 ignored real-backend smoke + 9 phase175c + 3 phase2a + 3 phase2b, Windows 14), `app/ui` `npm run build` PASS. Commit `5ab59af`.
+
 ### Phase 2 Runtime/UI stability repair (partial)
 
 - 修复服务端 `sequence_rejected`：所有 sequence 生成和恢复路径统一使用 Unix epoch milliseconds，并以持久值保证严格递增；不再使用从 `1` 开始的旧计数或仅使用 `rejected+1` 的恢复值。
