@@ -55,8 +55,8 @@ Status: Implemented, source-verified, and packaged into a fresh Windows Release.
 
 - 真实后端（用户提供的 WSS + Token）上传复测仍未执行；本轮以服务端 models.py 的真实 Pydantic 校验替代，但没有服务端进程/网络证据。
 - 打包后 UI 按钮点击 E2E（Start/Stop/服务器管理/详情）仍未完成；无 WebView2 自动点击环境。
-- Windows 平台安全套件（`security`）仍为空数组：WLAN BSS API 不暴露协商套件，文档注释明确不从 privacy bit 推断。
 - Classic Bluetooth 无 RSSI/RAW/service data：原生 inquiry API 不提供，保持字段缺省（服务端接受 null/空）。
+- Wi-Fi `security` 已从 `WlanGetAvailableNetworkList` 的 DOT11 auth/cipher 映射填充；若个别驱动不返回可见网络列表，该 BSS 记录仍可能为空数组。
 
 ### 下一步
 
@@ -66,6 +66,7 @@ Status: Implemented, source-verified, and packaged into a fresh Windows Release.
 
 ### 本轮 commit
 
+- `48fac3f` fix: populate Wi-Fi security from WlanGetAvailableNetworkList
 - `ac226f8` fix: upload Wi-Fi and Bluetooth as independent server envelopes
 - `5a3b693` docs: document independent Wi-Fi/Bluetooth uploads
 - `5ab59af` fix: align upload payloads with RemoteEnvServer API schema
