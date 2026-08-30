@@ -55,6 +55,8 @@ The target-scoped dispatcher groundwork is superseded by the live Phase 1.75-C r
 
 `RuntimeSupervisor -> DispatcherSupervisor -> one ServerWorker per selected ServerProfile`. Each worker owns its WebSocket session, heartbeat interval, reconnect backoff, stop signal, in-flight delivery, and status watch channel. Events allocate one durable global sequence and create one target delivery per selected server. ACK and recovery are target-scoped. Removed targets are stopped and their pending/in-flight deliveries are cancelled. Authentication and fatal protocol errors move only that worker to `Blocked`; transport errors reconnect only that target.
 
+Platform payload serialization is an explicit protocol boundary: Windows adapters normalize native observations to the server's canonical JSON field names/types before creating `CollectorEvent`; diagnostic/native-only fields remain internal or are deliberately omitted when the API has no equivalent.
+
 Event completion is target-scoped: an event is complete only when every selected delivery is acknowledged or explicitly cancelled. A blocked delivery remains incomplete and visible.
 
 ### Phase 1.75-C verification status

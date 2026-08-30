@@ -5,6 +5,7 @@ use super::{
 };
 use remote_env_core::bluetooth::{BluetoothObservation, BluetoothSnapshot};
 use remote_env_core::collector::CollectorEvent;
+use serde_json::Value;
 use std::sync::{Arc, Mutex};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -81,17 +82,27 @@ impl<B: BleScanner + 'static, C: ClassicBluetoothScanner + 'static> BluetoothCol
                     remote_env_core::bluetooth::BluetoothTransport::Classic => "classic",
                     remote_env_core::bluetooth::BluetoothTransport::Dual => "dual",
                 };
+                let technology = match observation.transport {
+                    remote_env_core::bluetooth::BluetoothTransport::Ble => "ble",
+                    remote_env_core::bluetooth::BluetoothTransport::Classic => "bluetooth_classic",
+                    remote_env_core::bluetooth::BluetoothTransport::Dual => "unknown",
+                };
                 serde_json::json!({
                     "address": observation.address,
+                    "address_type": "unknown",
                     "name": observation.name,
                     "rssi": observation.rssi,
+                    "technology": technology,
                     "mode": mode,
-                    "classicRssi": observation.rssi,
+
+                    "is_connected": Value::Null,
+                    "is_paired": Value::Null,
                     "classOfDevice": observation.class_of_device,
-                    "txPower": observation.tx_power,
-                    "serviceUuids": observation.service_uuids,
-                    "manufacturerData": observation.manufacturer_data.iter().map(|item| (item.company_id.to_string(), hex_encode(&item.data))).collect::<std::collections::HashMap<_, _>>(),
-                    "serviceData": observation.service_data.iter().map(|item| (item.uuid.clone(), hex_encode(&item.data))).collect::<std::collections::HashMap<_, _>>(),
+                    "tx_power": observation.tx_power,
+                    "manufacturer_id": observation.manufacturer_data.first().map(|item| item.company_id),
+                    "manufacturer_data": observation.manufacturer_data.first().map(|item| base64_encode(&item.data)),
+                    "service_uuids": observation.service_uuids,
+                    "service_data": observation.service_data.iter().map(|item| (item.uuid.clone(), base64_encode(&item.data))).collect::<std::collections::HashMap<_, _>>(),
                     "rawAdvertisementSections": observation.raw_advertisement_sections,
                     "rawHex": observation.raw_advertisement.as_ref().map(|value| hex_encode(value)),
                     "rawLength": observation.raw_advertisement.as_ref().map(Vec::len),
@@ -105,10 +116,14 @@ impl<B: BleScanner + 'static, C: ClassicBluetoothScanner + 'static> BluetoothCol
         let data = serde_json::json!({
             "scan_started_at": now_ms().saturating_sub(snapshot.scan_duration_ms as i64),
             "scan_finished_at": now_ms(),
-            "technology": "bluetooth",
-            "ble_available": snapshot.ble_available,
-            "classic_available": snapshot.classic_available,
-            "scan_duration_ms": snapshot.scan_duration_ms,
+            "technology": if snapshot.ble_available && !snapshot.classic_available {
+                "ble"
+            } else if snapshot.classic_available && !snapshot.ble_available {
+                "bluetooth_classic"
+            } else {
+                "unknown"
+            },
+            "is_enabled": snapshot.ble_available || snapshot.classic_available,
             "devices": devices,
         });
         Ok(CollectorEvent {

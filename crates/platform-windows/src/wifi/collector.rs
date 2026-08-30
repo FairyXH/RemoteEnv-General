@@ -51,11 +51,19 @@ impl<P: WlanProvider> WiFiCollector<P> {
             }
         };
         *self.state.lock().expect("collector state") = CollectorState::Ready;
+        let scan_finished_at = now_ms();
+        let scan_started_at = scan_finished_at
+            .saturating_sub(snapshot.scan_duration_ms as i64)
+            .max(1);
+        let data = serde_json::json!({
+            "scan_started_at": scan_started_at,
+            "scan_finished_at": scan_finished_at,
+            "networks": snapshot.networks,
+        });
         Ok(CollectorEvent {
             data_type: "wifi".into(),
-            timestamp_ms: now_ms(),
-            data: serde_json::to_value(snapshot)
-                .map_err(|e| WiFiError::InvalidData(e.to_string()))?,
+            timestamp_ms: scan_finished_at,
+            data,
         })
     }
     pub fn provider(&self) -> Arc<P> {

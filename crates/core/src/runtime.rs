@@ -51,7 +51,7 @@ fn persist_latest_events(
         latest_events.remove("wifi");
         latest_events.remove("bluetooth");
         let device_id = config.identity.device_id.clone();
-        let captured_at_ms = now_ms();
+        let captured_at_ms = wifi.timestamp_ms.max(bluetooth.timestamp_ms);
         let sequence = store.next_timestamp_sequence(&device_id, "bluetooth")?;
         let envelope = EnvironmentEnvelope {
             timestamp: captured_at_ms,
@@ -63,7 +63,7 @@ fn persist_latest_events(
                 serde_json::json!({
                     "captured_at_ms": captured_at_ms,
                     "devices": bluetooth.data["devices"],
-                    "technology": "bluetooth",
+                    "technology": "bluetooth_classic",
                     "wifi": wifi.data,
                     "bluetooth": bluetooth.data,
                 }),
@@ -74,7 +74,7 @@ fn persist_latest_events(
     }
     for (_, event) in latest_events.drain() {
         let device_id = config.identity.device_id.clone();
-        let timestamp = now_ms();
+        let timestamp = event.timestamp_ms.max(1);
         let sequence = store.next_timestamp_sequence(&device_id, &event.data_type)?;
         let envelope = EnvironmentEnvelope {
             timestamp,

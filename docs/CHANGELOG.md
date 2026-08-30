@@ -4,6 +4,8 @@
 
 ### Phase 2 Runtime/UI stability repair (partial)
 
+- Audited Windows/Core payloads against RemoteEnvServer `docs/api.md`: corrected Wi-Fi field names/types and band/security encoding, removed guessed security metadata, normalized Bluetooth canonical keys/technology/UUIDs, and retained Base64/HEX RAW representations. Rebuilt the Windows Tauri icon from `app/ui/res/mipmap-xxxhdpi/logo.png` into the configured multi-size `icon.ico`.
+
 - Fixed dropped lifecycle commands by using FIFO command delivery, joined Runtime/collector workers during stop, and made desktop Stop remove the complete Runtime and ServerWorkers.
 - Flushed events immediately when collection becomes active and surfaced persistence/dispatcher failures instead of silently discarding them.
 - Enforced independent 5-second JSON heartbeat scheduling, real-pong freshness, fixed 60-second no-pong reconnect threshold, and heartbeat UI severity bands.

@@ -27,12 +27,12 @@ pub struct RawAdvertisementSection {
     pub data_hex: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BluetoothObservation {
     pub address: String,
     pub transport: BluetoothTransport,
     pub name: Option<String>,
-    pub rssi: Option<i16>,
+    pub rssi: Option<f64>,
     pub service_uuids: Vec<String>,
     pub manufacturer_data: Vec<ManufacturerData>,
     pub service_data: Vec<ServiceData>,
@@ -42,11 +42,11 @@ pub struct BluetoothObservation {
     pub connectable: Option<bool>,
     pub class_of_device: Option<u32>,
     pub appearance: Option<u16>,
-    pub tx_power: Option<i16>,
+    pub tx_power: Option<f64>,
     pub timestamp_ms: i64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BluetoothSnapshot {
     pub observations: Vec<BluetoothObservation>,
     pub ble_available: bool,

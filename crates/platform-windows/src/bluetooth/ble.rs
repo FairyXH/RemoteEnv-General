@@ -16,7 +16,7 @@ use windows::core::GUID;
 #[derive(Debug, Default, Clone)]
 pub struct BleAdvertisement {
     pub name: Option<String>,
-    pub rssi: Option<i16>,
+    pub rssi: Option<f64>,
     pub service_uuids: Vec<String>,
     pub manufacturer_data: Vec<remote_env_core::bluetooth::ManufacturerData>,
     pub service_data: Vec<remote_env_core::bluetooth::ServiceData>,
@@ -24,7 +24,7 @@ pub struct BleAdvertisement {
     pub raw_advertisement: Option<Vec<u8>>,
     pub connectable: Option<bool>,
     pub appearance: Option<u16>,
-    pub tx_power: Option<i16>,
+    pub tx_power: Option<f64>,
 }
 
 fn read_buffer(buffer: windows::Storage::Streams::IBuffer) -> windows::core::Result<Vec<u8>> {
@@ -45,6 +45,10 @@ fn guid_string(guid: GUID) -> String {
     )
 }
 
+fn bluetooth_uuid16(value: u16) -> String {
+    format!("0000{value:04X}-0000-1000-8000-00805F9B34FB")
+}
+
 pub fn parse_advertisement(raw: &[u8]) -> BleAdvertisement {
     let mut result = BleAdvertisement::default();
     result.raw_advertisement = Some(raw.to_vec());
@@ -62,12 +66,12 @@ pub fn parse_advertisement(raw: &[u8]) -> BleAdvertisement {
         let data = &raw[offset + 1..offset + length];
         match ad_type {
             0x08 | 0x09 => result.name = String::from_utf8(data.to_vec()).ok(),
-            0x0A => result.tx_power = data.first().map(|value| *value as i8 as i16),
+            0x0A => result.tx_power = data.first().map(|value| *value as i8 as f64),
             0x16 if data.len() >= 2 => {
                 result
                     .service_data
                     .push(remote_env_core::bluetooth::ServiceData {
-                        uuid: format!("{:02X}{:02X}", data[1], data[0]),
+                        uuid: bluetooth_uuid16(u16::from_le_bytes([data[0], data[1]])),
                         data: data[2..].to_vec(),
                     })
             }
@@ -86,7 +90,7 @@ pub fn parse_advertisement(raw: &[u8]) -> BleAdvertisement {
                 for chunk in data.chunks_exact(2) {
                     result
                         .service_uuids
-                        .push(format!("{:02X}{:02X}", chunk[1], chunk[0]));
+                        .push(bluetooth_uuid16(u16::from_le_bytes([chunk[0], chunk[1]])));
                 }
             }
             0x01 if !data.is_empty() => result.connectable = Some(data[0] & 0x04 != 0),
@@ -214,7 +218,7 @@ impl BleScanner for NativeBleScanner {
                     .ok()
                     .map(|value| value.to_string_lossy())
                     .filter(|value| !value.is_empty()),
-                rssi: args.RawSignalStrengthInDBm().ok(),
+                rssi: args.RawSignalStrengthInDBm().ok().map(f64::from),
                 service_uuids,
                 manufacturer_data,
                 service_data: Vec::new(),
@@ -226,7 +230,7 @@ impl BleScanner for NativeBleScanner {
                 tx_power: args
                     .TransmitPowerLevelInDBm()
                     .ok()
-                    .and_then(|value| value.Value().ok()),
+                    .and_then(|value| value.Value().ok().map(f64::from)),
                 timestamp_ms: SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .unwrap_or_default()
@@ -272,11 +276,20 @@ mod tests {
         ];
         let parsed = parse_advertisement(&raw);
         assert_eq!(parsed.name.as_deref(), Some("Tag1"));
-        assert_eq!(parsed.tx_power, Some(-61));
+        assert_eq!(parsed.tx_power, Some(-61.0));
         assert_eq!(parsed.appearance, Some(0x1234));
         assert_eq!(parsed.manufacturer_data[0].company_id, 0x004C);
-        assert_eq!(parsed.service_data[0].uuid, "FEAA");
-        assert_eq!(parsed.service_uuids, vec!["180D", "180F"]);
+        assert_eq!(
+            parsed.service_data[0].uuid,
+            "0000FEAA-0000-1000-8000-00805F9B34FB"
+        );
+        assert_eq!(
+            parsed.service_uuids,
+            vec![
+                "0000180D-0000-1000-8000-00805F9B34FB",
+                "0000180F-0000-1000-8000-00805F9B34FB"
+            ]
+        );
         assert_eq!(parsed.raw_advertisement_sections[0].ad_type, 0x20);
         assert_eq!(parsed.raw_advertisement_sections[0].data_hex, "DEADBE");
         assert_eq!(parsed.raw_advertisement.as_deref(), Some(raw.as_slice()));

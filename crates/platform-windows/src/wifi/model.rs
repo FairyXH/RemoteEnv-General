@@ -3,40 +3,47 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Band {
+    #[serde(rename = "2_4ghz")]
     Band24Ghz,
+    #[serde(rename = "5ghz")]
     Band5Ghz,
+    #[serde(rename = "6ghz")]
     Band6Ghz,
+    #[serde(rename = "unknown")]
     Unknown,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub struct Security {
-    pub authentication: Option<String>,
-    pub encryption: Option<String>,
-    pub privacy: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WiFiObservation {
     pub ssid: Option<String>,
+    #[serde(skip_serializing)]
     pub ssid_bytes_hex: Option<String>,
     pub hidden: bool,
     pub bssid: String,
-    pub signal_strength_dbm: Option<i32>,
+    #[serde(rename = "rssi")]
+    pub rssi: Option<f64>,
+    #[serde(skip_serializing)]
     pub signal_percent: Option<u8>,
     pub channel: Option<u16>,
-    pub frequency_mhz: Option<u32>,
+    pub frequency_mhz: Option<f64>,
     pub band: Band,
+    #[serde(skip_serializing)]
     pub phy_type: Option<String>,
+    #[serde(skip_serializing)]
     pub network_type: Option<String>,
-    pub security: Security,
+    /// WLAN_BSS_ENTRY does not expose negotiated security suites. Do not
+    /// infer WPA/OPEN from the privacy bit; emit an empty standard list.
+    pub security: Vec<String>,
+    #[serde(skip_serializing)]
     pub interface_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WiFiSnapshot {
     pub networks: Vec<WiFiObservation>,
+    #[serde(skip_serializing)]
     pub interfaces: usize,
+    #[serde(skip_serializing)]
     pub scan_duration_ms: u64,
 }
 
@@ -59,11 +66,11 @@ pub(crate) fn format_bssid(bytes: &[u8; 6]) -> String {
         .join(":")
 }
 
-pub(crate) fn band_for_frequency(frequency_mhz: Option<u32>) -> Band {
+pub(crate) fn band_for_frequency(frequency_mhz: Option<f64>) -> Band {
     match frequency_mhz {
-        Some(2400..=2500) => Band::Band24Ghz,
-        Some(4900..=5900) => Band::Band5Ghz,
-        Some(5925..=7125) => Band::Band6Ghz,
+        Some(value) if (2400.0..=2500.0).contains(&value) => Band::Band24Ghz,
+        Some(value) if (4900.0..=5900.0).contains(&value) => Band::Band5Ghz,
+        Some(value) if (5925.0..=7125.0).contains(&value) => Band::Band6Ghz,
         _ => Band::Unknown,
     }
 }
@@ -97,6 +104,6 @@ mod tests {
         );
         assert_eq!(channel_for_frequency(2412), Some(1));
         assert_eq!(channel_for_frequency(5180), Some(36));
-        assert_eq!(band_for_frequency(Some(5975)), Band::Band6Ghz);
+        assert_eq!(band_for_frequency(Some(5975.0)), Band::Band6Ghz);
     }
 }

@@ -1,7 +1,7 @@
 use super::error::WiFiError;
 use super::model::{
-    Security, WiFiObservation, WiFiSnapshot, band_for_frequency, channel_for_frequency,
-    decode_ssid, format_bssid,
+    WiFiObservation, WiFiSnapshot, band_for_frequency, channel_for_frequency, decode_ssid,
+    format_bssid,
 };
 use std::ptr::null_mut;
 use std::time::Instant;
@@ -84,24 +84,21 @@ unsafe fn enumerate(handle: HANDLE, started: Instant) -> Result<WiFiSnapshot, Wi
             let entry = &*entry_base.add(item);
             let length = (entry.dot11Ssid.uSSIDLength as usize).min(entry.dot11Ssid.ucSSID.len());
             let (ssid, raw, hidden) = decode_ssid(&entry.dot11Ssid.ucSSID[..length]);
-            let frequency =
-                (entry.ulChCenterFrequency > 0).then_some(entry.ulChCenterFrequency / 1000);
+            let frequency = (entry.ulChCenterFrequency > 0)
+                .then_some((entry.ulChCenterFrequency / 1000) as f64);
             networks.push(WiFiObservation {
                 ssid,
                 ssid_bytes_hex: raw,
                 hidden,
                 bssid: format_bssid(&entry.dot11Bssid),
-                signal_strength_dbm: Some(entry.lRssi),
+                rssi: Some(entry.lRssi as f64),
                 signal_percent: Some(entry.uLinkQuality.min(100) as u8),
-                channel: frequency.and_then(channel_for_frequency),
+                channel: frequency.and_then(|value| channel_for_frequency(value as u32)),
                 frequency_mhz: frequency,
                 band: band_for_frequency(frequency),
                 phy_type: Some(format!("{}", entry.dot11BssPhyType)),
                 network_type: None,
-                security: Security {
-                    privacy: Some((entry.usCapabilityInformation & 0x0010) != 0),
-                    ..Security::default()
-                },
+                security: Vec::new(),
                 interface_id: interface_id.clone(),
             });
         }
