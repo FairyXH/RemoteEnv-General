@@ -1045,11 +1045,15 @@ pub fn run(tray_start: bool) {
         .expect("桌面应用初始化失败")
         .run(move |app, event| match event {
             tauri::RunEvent::Ready => {
-                // Tauri shows the main window after setup; hide it again for
-                // tray auto-start so the window never flashes on screen.
-                if tray_start {
-                    if let Some(window) = app.get_webview_window("main") {
+                if let Some(window) = app.get_webview_window("main") {
+                    if tray_start {
+                        // Tray auto-start: keep the main window hidden.
                         let _ = window.hide();
+                    } else {
+                        // Normal start: the window is created hidden by config,
+                        // so reveal it here after the UI is ready.
+                        let _ = window.show();
+                        let _ = window.set_focus();
                     }
                 }
             }

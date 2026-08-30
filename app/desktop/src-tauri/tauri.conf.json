@@ -10,7 +10,7 @@
     "frontendDist": "../../ui/dist"
   },
   "app": {
-    "windows": [{ "label": "main", "title": "远程环境采集器", "width": 980, "height": 720, "minWidth": 760, "minHeight": 560, "resizable": true, "visible": true }],
+    "windows": [{ "label": "main", "title": "远程环境采集器", "width": 980, "height": 720, "minWidth": 760, "minHeight": 560, "resizable": true, "visible": false }],
     "security": { "csp": "default-src 'self'; connect-src 'self' ws: wss:; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'" }
   },
   "bundle": {
