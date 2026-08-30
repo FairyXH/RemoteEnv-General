@@ -8,7 +8,9 @@
 - Windows Bluetooth upload now reports real BLE `address_type` (`public`/`random` via WinRT) instead of always `unknown`; BLE `service_data` is parsed from AD types 0x16/0x20/0x21 into UUID-keyed Base64; RSSI is clamped to the server-valid range.
 - Core combined Wi-Fi+Bluetooth envelope now carries the server Bluetooth standard fields at top level: `scan_started_at`, `scan_finished_at`, `is_enabled`, `devices`, `technology` (plus extension `wifi`/`bluetooth`/`captured_at_ms`). Legacy payload normalization also fills standard Wi-Fi/Bluetooth fields before resend.
 - Collector auth `capabilities` now uses canonical values (`wifi`, `bluetooth`) instead of the legacy alias `ble`.
-- Verified: `cargo fmt --all -- --check` PASS, `cargo check --workspace` PASS, `cargo test --workspace` PASS (Core 2 unit + 14 phase1 + 1 ignored real-backend smoke + 9 phase175c + 3 phase2a + 3 phase2b, Windows 14), `app/ui` `npm run build` PASS. Commit `5ab59af`.
+- Follow-up fix (user feedback): Wi-Fi and Bluetooth are uploaded as **independent envelopes** (`data_type="wifi"` and `data_type="bluetooth"`) instead of merging Wi-Fi into a Bluetooth envelope. The server selects and stores schemas by `data_type`, so the previous combined envelope hid Wi-Fi from the server's per-type latest-data/statistics views.
+- Follow-up fix: per-device Bluetooth UI extensions (`mode`, per-device `technology`, `rawAdvertisementSections`) are stripped at the upload boundary; the server stores only canonical `BluetoothDevice` fields plus `raw`/`rawHex`/`rawLength`, while local RuntimeStatus snapshots keep the diagnostic fields for the UI.
+- Verified: `cargo fmt --all -- --check` PASS, `cargo check --workspace` PASS, `cargo test --workspace` PASS (Core 2 unit + 14 phase1 + 1 ignored real-backend smoke + 9 phase175c + 3 phase2a + 3 phase2b, Windows 14), `app/ui` `npm run build` PASS. RemoteEnvServer `models.py` direct Pydantic checks (wifi envelope, bluetooth envelope, extension stripping, connected-wifi guard) PASS 6/6. Commit `5ab59af` (+ split-upload commits below).
 
 ### Phase 2 Runtime/UI stability repair (partial)
 
