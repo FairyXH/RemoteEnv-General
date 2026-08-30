@@ -130,6 +130,7 @@ function App() {
 
   return <main className="shell">
     <header className="topbar"><div><p>远程环境采集器</p><h1>远程环境采集器</h1><span className="device">设备 ID: {config.device_id || "正在准备"}</span></div><div className={`status ${status.connection === "Ready" ? "ok" : ""}`}>● {stateText(status.connection)}</div></header>
+    <p className="hint">自启动托盘模式：给程序快捷方式或启动命令追加参数 <code>--tray</code>，例如 <code>RemoteEnvCollector.exe --tray</code>。以 <code>--tray</code> 启动时主窗口保持隐藏，程序驻留系统托盘并自动开始采集；需要配置界面时点击托盘菜单「打开主窗口」。</p>
     {notice && <div className="notice" role="status">{notice}<button aria-label="关闭提示" onClick={() => setNotice(null)}>×</button></div>}
     <section className="runtime"><div><h2>采集服务</h2><span>{status.collection_running ? "运行中" : "已停止"} · 服务器连接独立管理 · 待上传 {status.pending} · 发送中 {status.in_flight} · 组合包成功 {status.uploaded} · 失败 {status.failed}</span></div><div className="actions"><label>上传间隔 <input type="number" min="1" max="3600" value={config.upload_interval_seconds} onChange={event => saveOptions({ upload_interval_seconds: Number(event.target.value) || 1 })}/> 秒</label><button className="primary" disabled={busy !== null} onClick={toggle}>{status.collection_running ? (busy === "runtime" ? "停止中..." : "停止采集") : (busy === "runtime" ? "启动中..." : "开始采集")}</button></div></section>
     <section className="panel"><div className="heading"><div><h2>服务器</h2><span>{config.server_mode === "Multi" ? "多服务器模式" : "单服务器模式"}</span></div><button className="icon" title="新增服务器" onClick={openNew}>＋</button></div>

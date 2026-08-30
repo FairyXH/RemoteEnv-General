@@ -74,19 +74,30 @@ fn acquire_instance_guard() -> Result<SingleInstanceGuard, String> {
     #[cfg(windows)]
     {
         use std::os::windows::ffi::OsStrExt;
-        use windows_sys::Win32::{Foundation::{GetLastError, ERROR_ALREADY_EXISTS}, System::Threading::CreateMutexW};
+        use windows_sys::Win32::{
+            Foundation::{ERROR_ALREADY_EXISTS, GetLastError},
+            System::Threading::CreateMutexW,
+        };
         let name: Vec<u16> = std::ffi::OsStr::new("Global\\RemoteEnvCollector.SingleInstance")
-            .encode_wide().chain(std::iter::once(0)).collect();
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
         let handle = unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
-        if handle.is_null() { return Err("无法创建应用单实例锁。".into()); }
+        if handle.is_null() {
+            return Err("无法创建应用单实例锁。".into());
+        }
         if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
-            unsafe { windows_sys::Win32::Foundation::CloseHandle(handle); }
+            unsafe {
+                windows_sys::Win32::Foundation::CloseHandle(handle);
+            }
             return Err("RemoteEnvCollector 已在运行，请使用现有窗口或托盘实例。".into());
         }
         return Ok(SingleInstanceGuard(handle as isize));
     }
     #[cfg(not(windows))]
-    { Ok(SingleInstanceGuard) }
+    {
+        Ok(SingleInstanceGuard)
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -648,25 +659,34 @@ fn connect_server_profile(
             .map_err(user_error)?,
         );
     }
-    let initial_status = guard.as_ref().map(RuntimeSupervisor::status).unwrap_or_default();
+    let initial_status = guard
+        .as_ref()
+        .map(RuntimeSupervisor::status)
+        .unwrap_or_default();
     let mut status = initial_status;
-    if let Some(server) = status.servers.iter_mut().find(|server| server.profile_id == id) {
+    if let Some(server) = status
+        .servers
+        .iter_mut()
+        .find(|server| server.profile_id == id)
+    {
         server.connection = remote_env_core::transport::ConnectionState::Connecting;
         server.heartbeat_alive = false;
         server.last_heartbeat_ms = None;
     } else {
-        status.servers.push(remote_env_core::worker::ServerWorkerStatus {
-            profile_id: id.clone(),
-            connection: remote_env_core::transport::ConnectionState::Connecting,
-            heartbeat_alive: false,
-            last_heartbeat_ms: None,
-            last_error: None,
-            pending: 0,
-            in_flight: 0,
-            blocked: 0,
-            uploaded: 0,
-            failed: 0,
-        });
+        status
+            .servers
+            .push(remote_env_core::worker::ServerWorkerStatus {
+                profile_id: id.clone(),
+                connection: remote_env_core::transport::ConnectionState::Connecting,
+                heartbeat_alive: false,
+                last_heartbeat_ms: None,
+                last_error: None,
+                pending: 0,
+                in_flight: 0,
+                blocked: 0,
+                uploaded: 0,
+                failed: 0,
+            });
     }
     status.connection = remote_env_core::transport::ConnectionState::Connecting;
     let _ = app.emit(STATUS_EVENT, &status);
@@ -871,7 +891,8 @@ fn spawn_status_bridge(app: tauri::AppHandle) {
     std::thread::spawn(move || {
         let mut last_connection: Option<String> = None;
         let mut last_scan_counts = (0_u64, 0_u64, 0_u64, 0_u64);
-        let mut last_heartbeats: std::collections::HashMap<String, Option<i64>> = std::collections::HashMap::new();
+        let mut last_heartbeats: std::collections::HashMap<String, Option<i64>> =
+            std::collections::HashMap::new();
         loop {
             std::thread::sleep(Duration::from_millis(200));
             if app.state::<AppState>().exiting.load(Ordering::Acquire) {
@@ -894,15 +915,28 @@ fn spawn_status_bridge(app: tauri::AppHandle) {
                     status.bluetooth_runtime.successful_scans,
                     status.bluetooth_runtime.failed_scans,
                 );
-                if last_connection.as_deref() != Some(connection.as_str()) || counts != last_scan_counts {
-                    info(format!("状态变化 connection={connection} collection_running={} wifi={:?} bluetooth={:?} wifi_scans={:?} bluetooth_scans={:?}", status.collection_running, status.wifi, status.bluetooth, status.wifi_runtime, status.bluetooth_runtime));
+                if last_connection.as_deref() != Some(connection.as_str())
+                    || counts != last_scan_counts
+                {
+                    info(format!(
+                        "状态变化 connection={connection} collection_running={} wifi={:?} bluetooth={:?} wifi_scans={:?} bluetooth_scans={:?}",
+                        status.collection_running,
+                        status.wifi,
+                        status.bluetooth,
+                        status.wifi_runtime,
+                        status.bluetooth_runtime
+                    ));
                     last_connection = Some(connection);
                     last_scan_counts = counts;
                 }
                 for server in &status.servers {
-                    let previous = last_heartbeats.insert(server.profile_id.clone(), server.last_heartbeat_ms);
+                    let previous =
+                        last_heartbeats.insert(server.profile_id.clone(), server.last_heartbeat_ms);
                     if previous != Some(server.last_heartbeat_ms) {
-                        info(format!("服务器心跳更新 profile_id={} alive={} last_heartbeat_ms={:?}", server.profile_id, server.heartbeat_alive, server.last_heartbeat_ms));
+                        info(format!(
+                            "服务器心跳更新 profile_id={} alive={} last_heartbeat_ms={:?}",
+                            server.profile_id, server.heartbeat_alive, server.last_heartbeat_ms
+                        ));
                     }
                 }
                 let _ = app.emit(STATUS_EVENT, status);
@@ -921,9 +955,9 @@ fn stop_for_exit(app: &tauri::AppHandle) {
     }
 }
 
-pub fn run() {
+pub fn run(tray_start: bool) {
     tauri::Builder::default()
-        .setup(|app| {
+        .setup(move |app| {
             let path = state_path(&app.handle()).map_err(|error| std::io::Error::other(error))?;
             app.manage(AppState {
                 runtime: Mutex::new(None),
@@ -965,6 +999,28 @@ pub fn run() {
                     _ => {}
                 })
                 .build(app)?;
+            if tray_start {
+                // Tray auto-start: keep the main window hidden and begin
+                // collection immediately, matching the tray "start" action.
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.hide();
+                }
+                info("收到 --tray 参数，隐藏主窗口并自动开始采集");
+                let handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(Duration::from_millis(500));
+                    let state = handle.state::<AppState>();
+                    match start_runtime(handle.clone(), state) {
+                        Ok(status) => info(format!(
+                            "托盘模式自动采集已启动 collection_running={}",
+                            status.collection_running
+                        )),
+                        Err(message) => {
+                            warn(format!("托盘模式自动启动采集失败: {message}"));
+                        }
+                    }
+                });
+            }
             spawn_status_bridge(handle);
             Ok(())
         })

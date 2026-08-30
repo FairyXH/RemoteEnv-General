@@ -12,6 +12,7 @@ h1, h2, p { margin: 0; } h1 { font-size: 25px; font-weight: 650; } h2 { font-siz
 .topbar p { color: #78c5ba; font-size: 13px; margin-bottom: 5px; }.device, .heading span, .server span, .server small, .runtime span, .empty, dt, .queue { color: #94a4b4; font-size: 12px; }
 .status { color: #e2b767; font-size: 14px; }.status.ok, .ready { color: #72c69b; }
 .notice { display: flex; justify-content: space-between; align-items: center; margin: 16px 0; padding: 9px 12px; border: 1px solid #806832; background: #2d291b; border-radius: 5px; color: #f2d58e; }.notice button { padding: 0 5px; background: transparent; border: 0; }
+.hint { margin: 12px 0 0; padding: 10px 12px; border: 1px solid #2f5d5a; background: #14292a; border-radius: 5px; color: #a9d8d2; font-size: 12px; line-height: 1.6; }.hint code { background: #0d171b; border: 1px solid #2d4149; border-radius: 3px; padding: 1px 5px; color: #e6f7f3; }
 .runtime, .panel { margin-top: 16px; border: 1px solid #334251; background: #18222c; border-radius: 6px; }.runtime { padding: 16px; }.runtime div { display: grid; gap: 5px; }
 .primary { background: #287a70; border-color: #379e90; color: #effffc; }.primary:hover { background: #319082; }.danger { color: #efaaa6; }
 .panel { overflow: hidden; }.heading { padding: 14px 16px; border-bottom: 1px solid #334251; }.heading div { display: grid; gap: 3px; }.icon { width: 32px; height: 30px; padding: 0; font-size: 19px; }
