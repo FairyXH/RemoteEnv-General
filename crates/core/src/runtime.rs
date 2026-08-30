@@ -32,65 +32,11 @@ fn persist_latest_events(
     config: &ClientConfig,
     latest_events: &mut HashMap<String, CollectorEvent>,
 ) -> Result<(), RuntimeError> {
-    if config.wifi_enabled && config.bluetooth_enabled {
-        let (Some(wifi), Some(bluetooth)) = (
-            latest_events.get("wifi").cloned(),
-            latest_events.get("bluetooth").cloned(),
-        ) else {
-            return Ok(());
-        };
-        let max_skew_ms = 15_000_i64;
-        if (wifi.timestamp_ms - bluetooth.timestamp_ms).abs() > max_skew_ms {
-            if wifi.timestamp_ms < bluetooth.timestamp_ms {
-                latest_events.remove("wifi");
-            } else {
-                latest_events.remove("bluetooth");
-            }
-            return Ok(());
-        }
-        latest_events.remove("wifi");
-        latest_events.remove("bluetooth");
-        let device_id = config.identity.device_id.clone();
-        let captured_at_ms = wifi.timestamp_ms.max(bluetooth.timestamp_ms);
-        let sequence = store.next_timestamp_sequence(&device_id, "bluetooth")?;
-        let mut data = bluetooth.data.clone();
-        if data["technology"] == serde_json::Value::String("bluetooth".into()) {
-            data["technology"] = serde_json::Value::String("unknown".into());
-        }
-        let scan_started_at = bluetooth
-            .data
-            .get("scan_started_at")
-            .cloned()
-            .unwrap_or(serde_json::Value::Null);
-        let scan_finished_at = bluetooth
-            .data
-            .get("scan_finished_at")
-            .cloned()
-            .unwrap_or(serde_json::Value::Null);
-        let is_enabled = bluetooth
-            .data
-            .get("is_enabled")
-            .cloned()
-            .unwrap_or(serde_json::Value::Null);
-        let envelope = EnvironmentEnvelope::with_timestamp(
-            device_id,
-            "bluetooth",
-            captured_at_ms,
-            sequence,
-            serde_json::json!({
-                "captured_at_ms": captured_at_ms,
-                "scan_started_at": scan_started_at,
-                "scan_finished_at": scan_finished_at,
-                "is_enabled": is_enabled,
-                "devices": bluetooth.data["devices"],
-                "technology": data["technology"].clone(),
-                "wifi": wifi.data,
-                "bluetooth": data,
-            }),
-        );
-        dispatcher.persist_event(config, &envelope)?;
-        return Ok(());
-    }
+    // Upload every collector source as its own server-canonical envelope.
+    // The server selects the data schema by `data_type`, so Wi-Fi must be
+    // persisted as `data_type="wifi"` and Bluetooth as `data_type="bluetooth"`;
+    // merging them into one Bluetooth envelope would hide Wi-Fi data from the
+    // server's per-type latest-data/statistics views.
     for (_, event) in latest_events.drain() {
         let device_id = config.identity.device_id.clone();
         let timestamp = event.timestamp_ms.max(1);

@@ -128,7 +128,12 @@ async fn wait_received(label: &str, received: &Arc<Mutex<Vec<Value>>>, count: us
         }
     })
     .await
-    .unwrap_or_else(|_| panic!("{label}: timed out waiting for {count} messages, received {}", received.lock().unwrap().len()));
+    .unwrap_or_else(|_| {
+        panic!(
+            "{label}: timed out waiting for {count} messages, received {}",
+            received.lock().unwrap().len()
+        )
+    });
 }
 
 async fn wait_ready(runtime: &RuntimeSupervisor, count: usize) {
@@ -193,7 +198,7 @@ async fn bluetooth_event_uses_shared_sequence_and_completes_delivery() {
         Ok(CollectorEvent {
             data_type: "bluetooth".into(),
             timestamp_ms: 1,
-            data: serde_json::json!({"scan_started_at":1,"scan_finished_at":2,"technology":"bluetooth","devices":[{"address":"AA:BB:CC:DD:EE:01","mode":"ble","name":"fixture","rssi":-61},{"address":"11:22:33:44:55:66","mode":"classic","name":"Keyboard","classOfDevice":123456}],"ble_available":true,"classic_available":true,"scan_duration_ms":4}),
+            data: serde_json::json!({"scan_started_at":1,"scan_finished_at":2,"technology":"unknown","is_enabled":true,"devices":[{"address":"AA:BB:CC:DD:EE:01","mode":"ble","name":"fixture","rssi":-61},{"address":"11:22:33:44:55:66","mode":"classic","name":"Keyboard","class_of_device":123456}]}),
         })
     }) as Arc<dyn Fn() -> Result<CollectorEvent, String> + Send + Sync>;
     let run_config = config(url);
@@ -215,11 +220,25 @@ async fn bluetooth_event_uses_shared_sequence_and_completes_delivery() {
     let payload = received.lock().unwrap()[0].clone();
     assert_eq!(payload["data_type"], "bluetooth");
     assert!(payload["sequence"].as_u64().unwrap() > 1);
-    assert_eq!(payload["data"]["devices"][0]["mode"], "ble");
-    assert_eq!(payload["data"]["devices"][1]["mode"], "classic");
+    assert_eq!(
+        payload["data"]["devices"][0]["address"],
+        "AA:BB:CC:DD:EE:01"
+    );
+    assert_eq!(
+        payload["data"]["devices"][1]["address"],
+        "11:22:33:44:55:66"
+    );
+    // Uploaded devices carry only server-standard fields; UI-only extensions
+    // (mode/technology/rawAdvertisementSections) are stripped at the boundary.
+    assert!(payload["data"]["devices"][0].get("mode").is_none());
+    assert!(payload["data"]["devices"][0].get("technology").is_none());
     tokio::time::timeout(Duration::from_secs(5), async {
         while !store
-            .event_complete("phase2b-device", "bluetooth", payload["sequence"].as_u64().unwrap())
+            .event_complete(
+                "phase2b-device",
+                "bluetooth",
+                payload["sequence"].as_u64().unwrap(),
+            )
             .unwrap()
         {
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -229,7 +248,12 @@ async fn bluetooth_event_uses_shared_sequence_and_completes_delivery() {
     .unwrap();
     assert_eq!(
         store
-            .delivery_status("bluetooth-server", "phase2b-device", "bluetooth", payload["sequence"].as_u64().unwrap())
+            .delivery_status(
+                "bluetooth-server",
+                "phase2b-device",
+                "bluetooth",
+                payload["sequence"].as_u64().unwrap()
+            )
             .unwrap()
             .as_deref(),
         Some("completed")
@@ -286,7 +310,9 @@ async fn bluetooth_multi_server_ack_isolation_and_recovery_preserve_envelope() {
     wait_received("A 首次", &a.received, 1).await;
     wait_received("B 首次", &b.received, 1).await;
     let initial = a.received.lock().unwrap()[0].clone();
-    let sequence = initial["sequence"].as_u64().expect("sequence must be numeric");
+    let sequence = initial["sequence"]
+        .as_u64()
+        .expect("sequence must be numeric");
     assert_ne!(
         store
             .delivery_status("bluetooth-a", "phase2b-multi-device", "bluetooth", sequence)
@@ -371,14 +397,11 @@ async fn bluetooth_dynamic_enable_disable_reuses_one_worker() {
     let mut config = config(url);
     config.bluetooth_enabled = false;
     config.scan_interval_seconds = 1;
-    let mut runtime = RuntimeSupervisor::start_with_collectors(
-        config.clone(),
-        store,
-        None,
-        Some(scan),
-    )
-    .unwrap();
-    runtime.set_collection_running(config.clone(), true).unwrap();
+    let mut runtime =
+        RuntimeSupervisor::start_with_collectors(config.clone(), store, None, Some(scan)).unwrap();
+    runtime
+        .set_collection_running(config.clone(), true)
+        .unwrap();
     tokio::time::sleep(Duration::from_millis(1200)).await;
     assert_eq!(calls.load(Ordering::SeqCst), 0);
     let mut enabled = config.clone();

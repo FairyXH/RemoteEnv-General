@@ -209,7 +209,7 @@ async fn wifi_event_reaches_upload_delivery_and_completes() {
 }
 
 #[tokio::test]
-async fn wifi_and_bluetooth_snapshots_upload_as_one_environment_envelope() {
+async fn wifi_and_bluetooth_snapshots_upload_as_separate_canonical_envelopes() {
     let fixture = Fixture::start().await;
     let dir = tempdir().unwrap();
     let store = StateStore::open(dir.path().join("state.sqlite3")).unwrap();
@@ -250,52 +250,38 @@ async fn wifi_and_bluetooth_snapshots_upload_as_one_environment_envelope() {
     .unwrap();
     runtime.set_collection_running(run_config, true).unwrap();
     fixture
-        .wait_for(|fixture| fixture.received.lock().unwrap().len() >= 2)
+        .wait_for(|fixture| {
+            let received = fixture.received.lock().unwrap();
+            received.iter().any(|item| item["data_type"] == "wifi")
+                && received.iter().any(|item| item["data_type"] == "bluetooth")
+        })
         .await;
     let received = fixture.received.lock().unwrap().clone();
-    assert_eq!(received.len(), 2);
-    assert!(received.iter().all(|item| item["data_type"] == "bluetooth"));
+    let wifi = received
+        .iter()
+        .find(|item| item["data_type"] == "wifi")
+        .expect("Wi-Fi envelope must be uploaded");
+    let bluetooth = received
+        .iter()
+        .find(|item| item["data_type"] == "bluetooth")
+        .expect("Bluetooth envelope must be uploaded");
+    assert_eq!(wifi["data"]["networks"][0]["bssid"], "AA:BB:CC:DD:EE:FF");
+    assert_eq!(wifi["data"]["is_connected"], false);
+    assert_eq!(wifi["data"]["dns_servers"], serde_json::json!([]));
+    assert_eq!(bluetooth["data"]["scan_started_at"], 1);
+    assert_eq!(bluetooth["data"]["scan_finished_at"], 2);
+    assert_eq!(bluetooth["data"]["is_enabled"], true);
+    assert_eq!(
+        bluetooth["data"]["devices"][0]["address"],
+        "AA:BB:CC:DD:EE:01"
+    );
+    // No combined wrapper: Wi-Fi is never hidden inside a Bluetooth envelope.
     assert!(
         received
             .iter()
-            .all(|item| item["data"]["devices"].is_array())
+            .all(|item| item["data"].get("wifi").is_none()
+                && item["data"].get("bluetooth").is_none())
     );
-    assert!(
-        received
-            .iter()
-            .all(|item| item["data"]["wifi"]["networks"].is_array())
-    );
-    assert!(
-        received
-            .iter()
-            .all(|item| item["data"]["bluetooth"]["devices"].is_array())
-    );
-    assert!(
-        received
-            .iter()
-            .all(|item| item["data"]["wifi"]["is_connected"] == false)
-    );
-    assert!(
-        received
-            .iter()
-            .all(|item| item["data"]["wifi"]["dns_servers"].is_array())
-    );
-    assert!(
-        received
-            .iter()
-            .all(|item| item["data"]["scan_started_at"] == 1)
-    );
-    assert!(
-        received
-            .iter()
-            .all(|item| item["data"]["scan_finished_at"] == 2)
-    );
-    assert!(
-        received
-            .iter()
-            .all(|item| item["data"]["is_enabled"] == true)
-    );
-    assert!(received[1]["sequence"].as_u64().unwrap() > received[0]["sequence"].as_u64().unwrap());
     runtime.stop();
 }
 

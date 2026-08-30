@@ -174,6 +174,20 @@ fn normalize_bluetooth_data(data: &mut Value) {
     object
         .entry("devices")
         .or_insert_with(|| Value::Array(Vec::new()));
+    // Strip non-standard per-device extension fields before upload. The server
+    // stores `raw`/`rawHex`/`rawLength` as the canonical raw representation;
+    // `mode`, per-device `technology`, and parsed `rawAdvertisementSections`
+    // are UI/diagnostic extensions that should not clutter the server schema.
+    if let Some(devices) = object.get_mut("devices").and_then(Value::as_array_mut) {
+        for device in devices {
+            if let Some(record) = device.as_object_mut() {
+                record.remove("mode");
+                record.remove("technology");
+                record.remove("rawAdvertisementSections");
+                record.remove("raw_advertisement_sections");
+            }
+        }
+    }
 }
 
 fn now_ms() -> i64 {

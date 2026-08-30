@@ -128,12 +128,29 @@ fn protocol_serializes_server_envelope_and_classifies_sequence_error() {
         "bluetooth",
         1_800_000_000_000,
         1_800_000_000_000,
-        serde_json::json!({"technology": "bluetooth", "devices": []}),
+        serde_json::json!({
+            "technology": "bluetooth",
+            "devices": [{"address": "AA:BB:CC:DD:EE:01", "mode": "ble", "rawAdvertisementSections": []}]
+        }),
     );
     assert_eq!(bluetooth.data["technology"], "unknown");
     assert_eq!(bluetooth.data["scan_started_at"], serde_json::Value::Null);
     assert_eq!(bluetooth.data["scan_finished_at"], serde_json::Value::Null);
     assert_eq!(bluetooth.data["is_enabled"], serde_json::Value::Null);
+    assert_eq!(
+        bluetooth.data["devices"][0].get("mode"),
+        None,
+        "UI-only mode extension must not be uploaded"
+    );
+    assert_eq!(
+        bluetooth.data["devices"][0].get("rawAdvertisementSections"),
+        None,
+        "UI-only raw section extension must not be uploaded"
+    );
+    assert_eq!(
+        bluetooth.data["devices"][0]["address"], "AA:BB:CC:DD:EE:01",
+        "server-standard address field must survive"
+    );
 
     let wifi = EnvironmentEnvelope::with_timestamp(
         "device-a",
