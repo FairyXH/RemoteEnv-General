@@ -34,7 +34,9 @@ fn main() {
                     first["name"],
                     first["rssi"],
                     first["service_uuids"],
-                    first["service_data"].as_object().map(|map| map.keys().collect::<Vec<_>>())
+                    first["service_data"]
+                        .as_object()
+                        .map(|map| map.keys().collect::<Vec<_>>())
                 );
             }
         }
