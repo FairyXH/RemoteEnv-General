@@ -1043,7 +1043,16 @@ pub fn run(tray_start: bool) {
         ])
         .build(tauri::generate_context!())
         .expect("桌面应用初始化失败")
-        .run(|app, event| match event {
+        .run(move |app, event| match event {
+            tauri::RunEvent::Ready => {
+                // Tauri shows the main window after setup; hide it again for
+                // tray auto-start so the window never flashes on screen.
+                if tray_start {
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = window.hide();
+                    }
+                }
+            }
             tauri::RunEvent::WindowEvent {
                 event: tauri::WindowEvent::CloseRequested { api, .. },
                 label,
