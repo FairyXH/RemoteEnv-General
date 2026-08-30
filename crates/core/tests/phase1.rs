@@ -122,6 +122,15 @@ fn protocol_serializes_server_envelope_and_classifies_sequence_error() {
         retryable: true,
     };
     assert!(error.requires_sequence_recovery());
+
+    let bluetooth = EnvironmentEnvelope::with_timestamp(
+        "device-a",
+        "bluetooth",
+        1_800_000_000_000,
+        1_800_000_000_000,
+        serde_json::json!({"technology": "bluetooth", "devices": []}),
+    );
+    assert_eq!(bluetooth.data["technology"], "unknown");
 }
 
 #[test]

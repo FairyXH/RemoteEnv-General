@@ -6,7 +6,7 @@ Read this file, `ARCHITECTURE.md`, and `DEVELOPMENT.md` before changes. For tran
 
 ## Current round: RemoteEnvServer API normalization and Windows Release icon
 
-Status: Implemented, tested, and sequence-fix Release-verified.
+Status: Implemented and locally tested; this `technology=bluetooth` compatibility fix is source-verified, but a fresh Release rebuild is still pending.
 
 后续修正：用户反馈真实服务端返回 `sequence_rejected / sequence is not newer`。已统一所有生产 sequence 入口：`StateStore::next_sequence` 委托 Unix 毫秒分配，`EnvironmentEnvelope::with_timestamp` 也会将传入 sequence 提升到当前 Unix 毫秒下限，`sequence_rejected` 恢复使用 `max(now_ms, rejected + 1)`，旧持久状态不会回退为 1/2 等计数值。相关测试已改为验证 Unix 毫秒量级和严格递增。
 
@@ -19,6 +19,12 @@ The Tauri icon was rebuilt from `app/ui/res/mipmap-xxxhdpi/logo.png` into a mult
 本轮工作区仍包含此前已存在的 Tauri 生命周期、Core 测试和 Release 二进制变更；未回滚。sequence 修正源代码已通过本地检查/测试，`rate_limited` 退避修正后的正式 Release 已重建并完成 EXE 5 秒进程冒烟；当前仍未完成：真实 Windows Wi-Fi/Bluetooth 后端上传复测、安装包安装验收、WebView2 UI 自动点击/截图 E2E。下一步应先完成真实后端复测，再在可用的交互式 Windows UI 自动化环境中完成其他验收；在此之前 Phase 2-C 继续保持 Partial。
 
 2026-08-30 rate limit follow-up: ServerWorker 对 `rate_limited` 明确返回本地 `RateLimited`，不再把它伪装成普通连接错误；worker 仍无限重连，退避为 `1s,2s,4s,8s,16s,32s,60s,60s...`，只有真实 `data_result` ACK 后重置退避，Runtime stop 可中断等待。新增指数退避封顶测试通过。正式 Release：`Release/Windows/RemoteEnvCollector/RemoteEnvCollector.exe` 12,443,136 bytes，安装包 3,096,876 bytes；EXE 5 秒启动冒烟通过。真实后端限流复测尚未执行。
+
+2026-08-30 technology follow-up: 服务端实际拒绝旧缓存中的顶层 `technology="bluetooth"`。API 文档和服务端 `BluetoothData` 明确只允许 `ble`、`bluetooth_classic`、`unknown`。已在 Bluetooth Runtime 组合和 SQLite 打开时的 legacy pending/in-flight/blocked payload normalization 增加兼容迁移，将旧 `bluetooth` 转为 `unknown`；Windows 新采集路径本身使用 canonical 值。修正后的 Release 尚待重建，真实后端复测尚未执行。
+
+技术判断：API 文档与服务端 `models.py` 一致，`technology="bluetooth"` 严格不合法；本次错误来自旧持久化 Envelope/组合数据在实际上传前未经过统一 DTO 归一化。现在 `EnvironmentEnvelope::with_timestamp`、Dispatcher 持久化边界、Runtime 组合和 SQLite 恢复都会归一化该旧值为 `unknown`，因此不会继续把旧值原样重传。
+
+本次源代码验证：`cargo check --workspace` PASS；`cargo test --workspace` 当前最后一轮曾因旧 Phase 1 fixture 仍断言 `sequence=1` 而失败，修正后 `phase1` 和 Phase 2 相关测试已通过；新增 `technology="bluetooth" -> "unknown"` 回归断言已加入。尚未对本轮 technology 修正后的完整 workspace 重新跑完最终全量测试和 Release。
 
 2026-08-30 sequence follow-up: 用户实际日志显示服务端拒绝旧 sequence。已修正 `StateStore::next_sequence`、`Runtime`、`EnvironmentEnvelope::with_timestamp` 和 `ServerWorker` recovery，所有新建/恢复 sequence 都至少为当前 Unix epoch milliseconds，并保持持久状态严格递增。测试 `phase1` 14 passed/1 ignored，`cargo check --workspace` passed。该修正尚需正式 Release 重建和真实后端复测。
 

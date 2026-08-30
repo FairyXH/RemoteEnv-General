@@ -23,7 +23,7 @@ impl EnvironmentEnvelope {
             device_id,
             data_type,
             now_ms(),
-            normalize_sequence(sequence),
+            sequence.max(now_ms() as u64),
             data,
         )
     }
@@ -32,18 +32,27 @@ impl EnvironmentEnvelope {
         device_id: impl Into<String>,
         data_type: impl Into<String>,
         timestamp: i64,
-        sequence: u64,
-        data: Value,
+        mut sequence: u64,
+        mut data: Value,
     ) -> Self {
+        if sequence < now_ms() as u64 {
+            sequence = now_ms() as u64;
+        }
+        let data_type = data_type.into();
+        normalize_protocol_data(&data_type, &mut data);
         Self {
             r#type: "environment_data".into(),
             version: 1,
             device_id: device_id.into(),
-            data_type: data_type.into(),
+            data_type,
             timestamp,
-            sequence: normalize_sequence(sequence),
+            sequence,
             data,
         }
+    }
+
+    pub fn normalize_for_transport(&mut self) {
+        normalize_protocol_data(&self.data_type, &mut self.data);
     }
 }
 
@@ -115,13 +124,23 @@ pub fn matches_ack(ack: &Ack, envelope: &EnvironmentEnvelope) -> bool {
         && ack.sequence == envelope.sequence
 }
 
+fn normalize_protocol_data(data_type: &str, data: &mut Value) {
+    if data_type != "bluetooth" || !data.is_object() {
+        return;
+    }
+    if data.get("technology").and_then(Value::as_str) == Some("bluetooth") {
+        data["technology"] = Value::String("unknown".into());
+    }
+    if let Some(nested) = data.get_mut("bluetooth") {
+        if nested.get("technology").and_then(Value::as_str) == Some("bluetooth") {
+            nested["technology"] = Value::String("unknown".into());
+        }
+    }
+}
+
 fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
-}
-
-fn normalize_sequence(sequence: u64) -> u64 {
-    (now_ms().max(0) as u64).max(sequence)
 }

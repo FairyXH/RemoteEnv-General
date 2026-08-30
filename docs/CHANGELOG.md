@@ -5,6 +5,7 @@
 ### Phase 2 Runtime/UI stability repair (partial)
 
 - 修复服务端 `sequence_rejected`：所有 sequence 生成和恢复路径统一使用 Unix epoch milliseconds，并以持久值保证严格递增；不再使用从 `1` 开始的旧计数或仅使用 `rejected+1` 的恢复值。
+- 修复历史 Bluetooth Envelope 的非法 `technology: "bluetooth"`：启动恢复和 Runtime 组合均改为服务端允许的 `unknown`，新上传仅使用 `ble`、`bluetooth_classic`、`unknown`。
 - 明确区分服务端 `rate_limited`：Worker 回收目标本地 in-flight 投递后继续无限重连，并使用 1/2/4/8/16/32/60 秒封顶指数退避，避免限流时忙循环；Runtime stop 可中断等待。
 - `EnvironmentEnvelope` 的带时间构造、兼容队列 API、SQLite 序列状态和 Worker 的旧序号恢复均统一经过 Unix 毫秒下限；测试夹具不再用 `1/2` 作为有效序号。
 - 已使用 sequence 修正后的源码重新构建 Windows Release，并验证最终 Portable EXE 进程存活 5 秒；真实后端复测仍待执行。

@@ -144,13 +144,15 @@ impl UploadDispatcher {
         if targets.is_empty() {
             return Err(DispatcherError::NoTargets);
         }
+        let mut normalized = envelope.clone();
+        normalized.normalize_for_transport();
         let mut created = 0;
         for target in targets {
             // Delivery identity follows the target token; event sequence remains global.
-            let target_envelope = if envelope.device_id == target.device_id {
-                envelope.clone()
+            let target_envelope = if normalized.device_id == target.device_id {
+                normalized.clone()
             } else {
-                let mut target_envelope = envelope.clone();
+                let mut target_envelope = normalized.clone();
                 target_envelope.device_id = target.device_id.clone();
                 target_envelope
             };

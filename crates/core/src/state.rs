@@ -146,8 +146,14 @@ impl StateStore {
             drop(stmt);
             for (id, raw) in rows {
                 let mut envelope: EnvironmentEnvelope = serde_json::from_str(&raw)?;
-                if envelope.sequence < floor {
+                let original_payload = envelope.data.clone();
+                envelope.normalize_for_transport();
+                let payload_changed = envelope.data != original_payload;
+                let sequence_changed = envelope.sequence < floor;
+                if sequence_changed {
                     envelope.sequence = floor;
+                }
+                if payload_changed || sequence_changed {
                     let update = format!(
                         "UPDATE {table} SET envelope_json=?1, status='pending' WHERE id=?2"
                     );
