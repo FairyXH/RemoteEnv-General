@@ -3,11 +3,4 @@
     <style name="Theme.remote_env_desktop" parent="Theme.MaterialComponents.DayNight.NoActionBar">
         <!-- Customize your theme here. -->
     </style>
-    <style name="Theme.remote_env_desktop.Background" parent="Theme.remote_env_desktop">
-        <item name="android:windowIsTranslucent">true</item>
-        <item name="android:windowBackground">@android:color/transparent</item>
-        <item name="android:windowNoTitle">true</item>
-        <item name="android:backgroundDimEnabled">false</item>
-        <item name="android:windowDisablePreview">true</item>
-    </style>
 </resources>
