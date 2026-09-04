@@ -12,5 +12,6 @@ object HeadlessRuntime {
   @JvmStatic external fun nativeSubmitEvents(eventsJson: String): String
   @JvmStatic external fun nativeIntervalMillis(): Long
 
-  fun start(context: Context): String = nativeStart(context.filesDir.absolutePath)
+  // Matches Tauri's Android app_data_dir resolver, so UI and service share the same databases.
+  fun start(context: Context): String = nativeStart(context.dataDir.absolutePath)
 }
