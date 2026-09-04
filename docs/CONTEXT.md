@@ -229,3 +229,48 @@ The combined-upload implementation is in commits `f792175` and `4b0e6d4`: Wi-Fi 
 
 Phase 1.75-C is Complete: RuntimeSupervisor -> DispatcherSupervisor -> ServerWorker(s), target delivery persistence, independent WebSocket workers, recovery, heartbeat, ACK isolation, and real backend protocol verification are complete. The old Phase 1.5/1.75-B notes remain below in Git history/docs for continuity.
 
+## 2026-09-03 数据库拆分 + 取消 WiFi/蓝牙开关 + 采集错误指数退避
+
+Status: Implemented, source-verified, tests passing, Release rebuilt and smoke-verified.
+
+### 问题背景
+用户实测反馈：(1) `state.sqlite3` 最多增长到几百 MB，导致后续启动直接读取失败；(2) 不再需要 WiFi/蓝牙开关概念，应当永远全量采集所有适配器结果并合并上传，任何错误无限重试 + 指数退避（至多 120 秒）。
+
+### 数据库拆分（核心目标 1）
+`crates/core/src/state.rs` 重写为两个独立数据库：
+- **用户配置库 `state.sqlite3`**（原文件名保留，兼容既有用户配置）：仅持久化 `client_config`、`server_profiles`、`sequence`、window geometry、`seen_profile`、`server_state`、`blocked` 等用户配置与持久状态。保持整洁，不写入高频缓存。
+- **状态缓存库 `state_cache.sqlite3`（新建）**：仅持久化投递缓存 `upload_delivery` 与 `cached_status`。这是真正会无限增长的来源。
+- 两个库均通过 `StateStore::open(config_path, state_cache_path)` 同时打开；`load_config` 与所有测试调用点同步改为双参数。
+- **损坏自动重建**：`open_database` 对每个库先试用默认 `PRAGMA` 打开；若 `pragma integrity_check` 失败（损坏），直接 `remove_file` 后重新 `open` 空库并建表。缓存库重建代价低（仅丢失未完成/已完成投递缓存，不影响配置）。
+- **定期清理**：运行时主循环新增 `cleanup_cache_tick`（`interval(600s)`），每 10 分钟调用 `cleanup_state_cache(prune_before = now - 24h)`，自动删除 24 小时前已完成/已取消的投递记录，防止无限制增长。
+- **按需清理命令**：新增 Tauri 命令 `cleanup_state_cache`（删除过期记录，返回 `removed_rows` 与缓存库当前字节数）和 `get_state_info`（返回两个库的绝对路径与字节大小）。UI 新增「本地数据库」区块展示两库大小并提供「清理状态缓存」按钮。
+
+### 取消 WiFi/蓝牙开关（核心目标 2）
+- `crates/core/src/config.rs`：从 `ClientConfig` 删除 `wifi_enabled`、`bluetooth_enabled` 字段；`Default` 与 `load_config`/序列化同步移除。
+- `crates/core/src/runtime.rs`：`PeriodicCollectorHandle::start` 与 `BluetoothWorkerHandle::start` 不再用开关门控扫描；`configure()` 的 `enabled` 仅用于运行时状态展示，采集始终进行。`RuntimeSupervisor::start_with_collectors` 中所有 worker 以 `enabled=true` 启动；`set_runtime_options` 不再接受 `wifi_enabled`/`bluetooth_enabled`。
+- `app/desktop/src-tauri/src/lib.rs`：`set_runtime_options` 移除两开关参数；`DesktopConfigView`/`config_view` 移除两字段；`get_state_info`/`cleanup_state_cache` 注册到 `invoke_handler`。
+- **多适配器全量采集 + 合并**：Windows Wi-Fi 仍遍历所有 WLAN 接口并合并为一个 `data_type="wifi"` envelope；蓝牙仍合并 BLE + Classic。无开关后默认全部采集。
+- UI（`app/ui/src/main.tsx` + `styles.css`）：移除 Wi-Fi/蓝牙开关 `switch` 与 `onToggle`，卡片显示「持续采集中」徽标；错误提示改为「将按指数退避自动重试（最长 120 秒）」。
+
+### 采集错误指数退避（核心目标 2）
+- 新增 `retry_after_error(statuses, &stop, error_delay)` 辅助：在 worker 异步任务中，扫描失败时 `sleep(error_delay)` 后 `reset_immediately()` 立即重试，错误退避按 `1s,2s,4s,...,120s` 封顶（反复乘 2 并 `min(120s)`）；成功后重置为初始延迟，恢复正常 `scan_interval` 周期。Worker 被 stop 时可中断等待。
+- 该退避独立于网络/WebSocket 重连退避（后者已在 ServerWorker 中按 5s/60s 心跳与指数退避处理）。
+
+### 验证结果
+- `cargo fmt --all`：PASS（已格式化 lib.rs/runtime.rs 等）。
+- `cargo check --workspace`：PASS（core/windows/linux/android/macos/desktop 全部编译）。
+- `cargo test --workspace`：PASS。计数：Core 2 unit、phase1 14 passed/1 ignored、phase175c 9、phase2a 3、phase2b 3（重写为"跨配置更新持续采集"）、Windows 平台测试。注意 `phase_175c_missing_pong_enters_reconnecting` 为 60s 心跳超时行为测试，在 workspace 并行运行时偶发时序失败（单次隔离运行稳定 PASS），属既有 timing 测试，非本次改动引入；本次未改动 pong/heartbeat 逻辑。
+- `app/ui` `npm run build`：PASS（tsc + vite，160KB JS）。
+- 正式 Release `scripts/build-release.ps1`：PASS。产物 `Release/Windows/RemoteEnvCollector/RemoteEnvCollector.exe`（12,604,416 bytes）、`Release/Windows/RemoteEnvCollector-Setup.exe`（3,183,812 bytes），版本 `0.2.0`。EXE 启动存活 6 秒进程冒烟 PASS（非 UI 点击 E2E）。
+- 真实后端上传复测、WebView2 UI 自动点击 E2E：仍未执行（无凭据注入/无自动化环境），按既有规范不标记为 Complete。
+
+### 当前限制 / 未完成
+- 真实后端 Wi-Fi/蓝牙上传与 ACK 复测未执行；状态缓存库增长行为需长期运行实测确认（已加 24h 定期清理 + 手动清理命令兜底）。
+- 打包 UI 按钮点击 E2E 未执行。
+- `phase175c` 60s pong 超时测试在并行 workspace 下偶发 flaky，建议后续改为单测串行或放宽断言窗口（非本次范围）。
+
+### 下一步
+1. 注入真实后端凭据（仅进程环境变量）复测上传、ACK、断线恢复与新双库行为。
+2. 交互式桌面会话完成打包 UI 点击验收（启动/停止/服务器管理/详情/清理缓存）。
+3. 可选：将 `phase175c` 60s 测试改为串行或放宽时序窗口以消除偶发 flaky。
+

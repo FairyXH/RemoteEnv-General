@@ -52,7 +52,7 @@ Release capability grants `core:event:default` to the `main` window so the React
 
 ## 故障日志
 
-当前版本把结构化运行状态显示在主界面，包括服务器连接、队列计数、扫描耗时、成功/失败计数和可读的采集错误。采集错误不会打印认证令牌、Cookie 或 Authorization header。运行日志写入 `%APPDATA%\com.remoteenv.collector\logs\collector.log`，最多保留最近 5 MB，超过后轮转为 `collector.log.1`；日志至少记录启动、服务器连接请求、扫描成功/失败和采集服务关键错误。收集故障信息时请提供应用版本、Windows 版本、主界面状态和复现时间；不要发送 `state.sqlite3` 或包含令牌的配置内容。
+当前版本把结构化运行状态显示在主界面，包括服务器连接、队列计数、扫描耗时、成功/失败计数和可读的采集错误。采集错误不会打印认证令牌、Cookie 或 Authorization header。运行日志写入 `%APPDATA%\com.remoteenv.collector\logs\collector.log`，最多保留最近 5 MB，超过后轮转为 `collector.log.1`；日志至少记录启动、服务器连接请求、扫描成功/失败和采集服务关键错误。收集故障信息时请提供应用版本、Windows 版本、主界面状态和复现时间；不要发送 `state.sqlite3`、新增加的 `state_cache.sqlite3`，或包含令牌的配置内容。用户配置库（`state.sqlite3`）保持整洁，仅含配置与持久状态；状态缓存库（`state_cache.sqlite3`）可随时由程序自动重建，损坏时直接删除重建即可，不会影响用户配置。
 
 ## 验收命令
 
