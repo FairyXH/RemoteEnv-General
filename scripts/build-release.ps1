@@ -1,6 +1,12 @@
 [CmdletBinding()]
 param()
 
+# Backward-compatible entry point.
+& (Join-Path $PSScriptRoot 'build-windows.ps1')
+exit $LASTEXITCODE
+
+<#
+
 $ErrorActionPreference = "Stop"
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $releaseRoot = Join-Path $projectRoot "Release\Windows"
@@ -90,3 +96,4 @@ Write-Host "  Tauri Rust build     PASS"
 Write-Host "  executable exists    PASS"
 Write-Host "  installer bundle     $(if ($bundleCreated) { 'PASS' } else { 'NOT GENERATED' })"
 Write-Host "  file description     $($metadata.FileDescription)"
+#>
