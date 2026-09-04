@@ -1,8 +1,9 @@
 use crate::config::{ClientConfig, DeviceIdentity, LoggingLevel};
 use crate::protocol::EnvironmentEnvelope;
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -15,23 +16,81 @@ pub enum StateError {
     Poisoned,
 }
 
+/// Schema for the small, always-clean user configuration database.
+/// Holds only `metadata` (config + identity). Never grows with upload cache.
+const CONFIG_SCHEMA: &str = "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);";
+
+/// Schema for the larger, rebuildable state cache database.
+/// Holds sequence bookkeeping and upload delivery rows. This file may be
+/// deleted and rebuilt at any time without losing user configuration.
+const STATE_SCHEMA: &str = "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; CREATE TABLE IF NOT EXISTS sequences (device_id TEXT NOT NULL, data_type TEXT NOT NULL, value INTEGER NOT NULL, PRIMARY KEY(device_id, data_type)); CREATE TABLE IF NOT EXISTS upload_queue (id INTEGER PRIMARY KEY AUTOINCREMENT, envelope_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', created_at_ms INTEGER NOT NULL DEFAULT 0, UNIQUE(envelope_json)); CREATE INDEX IF NOT EXISTS idx_upload_queue_pending ON upload_queue(status, id); CREATE TABLE IF NOT EXISTS upload_deliveries (id INTEGER PRIMARY KEY AUTOINCREMENT, target_id TEXT NOT NULL, envelope_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', created_at_ms INTEGER NOT NULL DEFAULT 0, UNIQUE(target_id, envelope_json)); CREATE INDEX IF NOT EXISTS idx_upload_deliveries_pending ON upload_deliveries(target_id, status, id);";
+
 #[derive(Clone)]
 pub struct StateStore {
-    connection: Arc<Mutex<Connection>>,
+    config: Arc<Mutex<Connection>>,
+    state: Arc<Mutex<Connection>>,
 }
 
 impl StateStore {
-    pub fn open(path: impl AsRef<Path>) -> Result<Self, StateError> {
-        let connection = Connection::open(path)?;
-        connection.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS sequences (device_id TEXT NOT NULL, data_type TEXT NOT NULL, value INTEGER NOT NULL, PRIMARY KEY(device_id, data_type)); CREATE TABLE IF NOT EXISTS upload_queue (id INTEGER PRIMARY KEY AUTOINCREMENT, envelope_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', UNIQUE(envelope_json)); CREATE INDEX IF NOT EXISTS idx_upload_queue_pending ON upload_queue(status, id); CREATE TABLE IF NOT EXISTS upload_deliveries (id INTEGER PRIMARY KEY AUTOINCREMENT, target_id TEXT NOT NULL, envelope_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', UNIQUE(target_id, envelope_json)); CREATE INDEX IF NOT EXISTS idx_upload_deliveries_pending ON upload_deliveries(target_id, status, id);")?;
-        Self::normalize_legacy_sequences(&connection)?;
+    /// Opens the split databases. `config_path` is the small, clean user
+    /// configuration database; `state_path` is the larger, rebuildable upload
+    /// cache. If the state cache cannot be opened or repaired it is deleted and
+    /// recreated so the client can keep running.
+    pub fn open(
+        config_path: impl AsRef<Path>,
+        state_path: impl AsRef<Path>,
+    ) -> Result<Self, StateError> {
+        let config = Self::open_config(config_path.as_ref())?;
+        let state = Self::open_state(state_path.as_ref())?;
         Ok(Self {
-            connection: Arc::new(Mutex::new(connection)),
+            config: Arc::new(Mutex::new(config)),
+            state: Arc::new(Mutex::new(state)),
         })
     }
 
-    fn lock(&self) -> Result<std::sync::MutexGuard<'_, Connection>, StateError> {
-        self.connection.lock().map_err(|_| StateError::Poisoned)
+    fn open_config(path: &Path) -> Result<Connection, StateError> {
+        let connection = Connection::open(path)?;
+        connection.execute_batch(CONFIG_SCHEMA)?;
+        Ok(connection)
+    }
+
+    fn open_state(path: &Path) -> Result<Connection, StateError> {
+        match Self::try_open_state(path) {
+            Ok(connection) => Ok(connection),
+            Err(error) => {
+                eprintln!("state cache open failed, rebuilding from empty: {error}");
+                Self::remove_sidecar(path, "-wal");
+                Self::remove_sidecar(path, "-shm");
+                let _ = std::fs::remove_file(path);
+                let connection = Connection::open(path)?;
+                connection.execute_batch(STATE_SCHEMA)?;
+                Ok(connection)
+            }
+        }
+    }
+
+    fn try_open_state(path: &Path) -> Result<Connection, StateError> {
+        let connection = Connection::open(path)?;
+        connection.execute_batch(STATE_SCHEMA)?;
+        // Force a trivial read so a corrupt page is surfaced here, not later.
+        connection.query_row("SELECT 1", [], |row| row.get::<_, i64>(0))?;
+        Self::normalize_legacy_sequences(&connection)?;
+        Ok(connection)
+    }
+
+    fn remove_sidecar(base: &Path, suffix: &str) {
+        if let Some(name) = base.file_name().and_then(|name| name.to_str()) {
+            let sidecar = base.with_file_name(format!("{name}{suffix}"));
+            let _ = std::fs::remove_file(sidecar);
+        }
+    }
+
+    fn lock_config(&self) -> Result<std::sync::MutexGuard<'_, Connection>, StateError> {
+        self.config.lock().map_err(|_| StateError::Poisoned)
+    }
+
+    fn lock_state(&self) -> Result<std::sync::MutexGuard<'_, Connection>, StateError> {
+        self.state.lock().map_err(|_| StateError::Poisoned)
     }
 
     pub fn next_sequence(&self, device_id: &str, data_type: &str) -> Result<u64, StateError> {
@@ -43,7 +102,7 @@ impl StateStore {
         device_id: &str,
         data_type: &str,
     ) -> Result<Option<u64>, StateError> {
-        let connection = self.lock()?;
+        let connection = self.lock_state()?;
         Ok(connection
             .query_row(
                 "SELECT value FROM sequences WHERE device_id=?1 AND data_type=?2",
@@ -55,7 +114,7 @@ impl StateStore {
     }
 
     pub fn latest_sequence(&self, device_id: &str, data_type: &str) -> Result<u64, StateError> {
-        let connection = self.lock()?;
+        let connection = self.lock_state()?;
         let sequence = connection
             .query_row(
                 "SELECT MAX(CAST(json_extract(envelope_json, '$.sequence') AS INTEGER)) FROM upload_deliveries WHERE json_extract(envelope_json, '$.device_id')=?1 AND json_extract(envelope_json, '$.data_type')=?2",
@@ -80,7 +139,7 @@ impl StateStore {
         data_type: &str,
     ) -> Result<u64, StateError> {
         let timestamp = Self::now_ms();
-        let connection = self.lock()?;
+        let connection = self.lock_state()?;
         let current: Option<i64> = connection
             .query_row(
                 "SELECT value FROM sequences WHERE device_id=?1 AND data_type=?2",
@@ -100,7 +159,7 @@ impl StateStore {
         data_type: &str,
         minimum: u64,
     ) -> Result<(), StateError> {
-        let c = self.lock()?;
+        let c = self.lock_state()?;
         let mut stmt = c.prepare("SELECT id,envelope_json FROM upload_deliveries WHERE target_id=?1 AND status IN ('pending','in_flight','blocked')")?;
         let rows = stmt
             .query_map(params![target_id], |r| {
@@ -174,7 +233,7 @@ impl StateStore {
         platform: &str,
         version: &str,
     ) -> Result<DeviceIdentity, StateError> {
-        let connection = self.lock()?;
+        let connection = self.lock_config()?;
         if let Some(raw) = connection
             .query_row("SELECT value FROM metadata WHERE key='identity'", [], |r| {
                 r.get::<_, String>(0)
@@ -199,12 +258,13 @@ impl StateStore {
     }
 
     pub fn save_config(&self, config: &ClientConfig) -> Result<(), StateError> {
-        let connection = self.lock()?;
+        let connection = self.lock_config()?;
         connection.execute("INSERT INTO metadata(key,value) VALUES('config',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",params![serde_json::to_string(config)?])?;
         Ok(())
     }
+
     pub fn load_config(&self) -> Result<Option<ClientConfig>, StateError> {
-        let connection = self.lock()?;
+        let connection = self.lock_config()?;
         Ok(connection
             .query_row("SELECT value FROM metadata WHERE key='config'", [], |r| {
                 r.get::<_, String>(0)
@@ -213,16 +273,18 @@ impl StateStore {
             .map(|v| serde_json::from_str(&v))
             .transpose()?)
     }
+
     pub fn enqueue(&self, envelope: &EnvironmentEnvelope) -> Result<bool, StateError> {
-        let connection = self.lock()?;
+        let connection = self.lock_state()?;
         let inserted = connection.execute(
-            "INSERT OR IGNORE INTO upload_queue(envelope_json,status) VALUES(?1,'pending')",
-            params![serde_json::to_string(envelope)?],
+            "INSERT OR IGNORE INTO upload_queue(envelope_json,status,created_at_ms) VALUES(?1,'pending',?2)",
+            params![serde_json::to_string(envelope)?, Self::now_ms() as i64],
         )?;
         Ok(inserted == 1)
     }
+
     pub fn pending(&self) -> Result<Vec<(i64, EnvironmentEnvelope)>, StateError> {
-        let connection = self.lock()?;
+        let connection = self.lock_state()?;
         let mut stmt = connection.prepare(
             "SELECT id,envelope_json FROM upload_queue WHERE status='pending' ORDER BY id",
         )?;
@@ -241,37 +303,42 @@ impl StateStore {
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(StateError::Database)
     }
+
     pub fn claim(&self, id: i64) -> Result<(), StateError> {
-        let c = self.lock()?;
+        let c = self.lock_state()?;
         c.execute(
             "UPDATE upload_queue SET status='in_flight' WHERE id=?1 AND status='pending'",
             params![id],
         )?;
         Ok(())
     }
+
     pub fn acknowledge(&self, id: i64) -> Result<(), StateError> {
-        let c = self.lock()?;
+        let c = self.lock_state()?;
         c.execute("DELETE FROM upload_queue WHERE id=?1", params![id])?;
         Ok(())
     }
+
     pub fn recover_in_flight(&self) -> Result<(), StateError> {
-        let c = self.lock()?;
+        let c = self.lock_state()?;
         c.execute(
             "UPDATE upload_queue SET status='pending' WHERE status='in_flight'",
             [],
         )?;
         Ok(())
     }
+
     pub fn block(&self, id: i64) -> Result<(), StateError> {
-        let c = self.lock()?;
+        let c = self.lock_state()?;
         c.execute(
             "UPDATE upload_queue SET status='blocked' WHERE id=?1",
             params![id],
         )?;
         Ok(())
     }
+
     pub fn count_pending(&self) -> Result<usize, StateError> {
-        let c = self.lock()?;
+        let c = self.lock_state()?;
         Ok(c.query_row(
             "SELECT COUNT(*) FROM upload_queue WHERE status IN ('pending','in_flight')",
             [],
@@ -280,7 +347,7 @@ impl StateStore {
     }
 
     pub fn count_status(&self, status: &str) -> Result<usize, StateError> {
-        let c = self.lock()?;
+        let c = self.lock_state()?;
         Ok(c.query_row(
             "SELECT COUNT(*) FROM upload_queue WHERE status=?1",
             params![status],
@@ -295,7 +362,7 @@ impl StateStore {
         minimum: u64,
     ) -> Result<(), StateError> {
         let minimum = minimum.max(Self::now_ms());
-        let c = self.lock()?;
+        let c = self.lock_state()?;
         c.execute(
             "INSERT INTO sequences(device_id,data_type,value) VALUES(?1,?2,?3) ON CONFLICT(device_id,data_type) DO UPDATE SET value=MAX(value, excluded.value)",
             params![device_id, data_type, minimum as i64],
@@ -308,16 +375,16 @@ impl StateStore {
         target_id: &str,
         envelope: &EnvironmentEnvelope,
     ) -> Result<bool, StateError> {
-        let c = self.lock()?;
+        let c = self.lock_state()?;
         let inserted = c.execute(
-            "INSERT OR IGNORE INTO upload_deliveries(target_id,envelope_json,status) VALUES(?1,?2,'pending')",
-            params![target_id, serde_json::to_string(envelope)?],
+            "INSERT OR IGNORE INTO upload_deliveries(target_id,envelope_json,status,created_at_ms) VALUES(?1,?2,'pending',?3)",
+            params![target_id, serde_json::to_string(envelope)?, Self::now_ms() as i64],
         )?;
         Ok(inserted == 1)
     }
 
     pub fn count_target_status(&self, target_id: &str, status: &str) -> Result<usize, StateError> {
-        let c = self.lock()?;
+        let c = self.lock_state()?;
         Ok(c.query_row(
             "SELECT COUNT(*) FROM upload_deliveries WHERE target_id=?1 AND status=?2",
             params![target_id, status],
@@ -329,7 +396,7 @@ impl StateStore {
         &self,
         target_id: &str,
     ) -> Result<Vec<(i64, EnvironmentEnvelope)>, StateError> {
-        let c = self.lock()?;
+        let c = self.lock_state()?;
         let mut stmt = c.prepare("SELECT id,envelope_json FROM upload_deliveries WHERE target_id=?1 AND status='pending' ORDER BY id")?;
         let rows = stmt.query_map(params![target_id], |r| {
             let id = r.get(0)?;
@@ -348,13 +415,13 @@ impl StateStore {
     }
 
     pub fn claim_target(&self, target_id: &str, id: i64) -> Result<(), StateError> {
-        let c = self.lock()?;
+        let c = self.lock_state()?;
         c.execute("UPDATE upload_deliveries SET status='in_flight' WHERE target_id=?1 AND id=?2 AND status='pending'", params![target_id, id])?;
         Ok(())
     }
 
     pub fn acknowledge_target(&self, target_id: &str, id: i64) -> Result<(), StateError> {
-        let c = self.lock()?;
+        let c = self.lock_state()?;
         c.execute(
             "UPDATE upload_deliveries SET status='completed' WHERE target_id=?1 AND id=?2 AND status='in_flight'",
             params![target_id, id],
@@ -384,7 +451,7 @@ impl StateStore {
         &self,
         target_id: &str,
     ) -> Result<Vec<(String, EnvironmentEnvelope)>, StateError> {
-        let c = self.lock()?;
+        let c = self.lock_state()?;
         let mut stmt = c.prepare(
             "SELECT status,envelope_json FROM upload_deliveries WHERE target_id=?1 ORDER BY id",
         )?;
@@ -426,7 +493,7 @@ impl StateStore {
     }
 
     fn all_delivery_envelopes(&self) -> Result<Vec<(String, EnvironmentEnvelope)>, StateError> {
-        let c = self.lock()?;
+        let c = self.lock_state()?;
         let mut stmt =
             c.prepare("SELECT status,envelope_json FROM upload_deliveries ORDER BY id")?;
         let rows = stmt.query_map([], |r| {
@@ -446,13 +513,13 @@ impl StateStore {
     }
 
     pub fn recover_target(&self, target_id: &str) -> Result<(), StateError> {
-        let c = self.lock()?;
+        let c = self.lock_state()?;
         c.execute("UPDATE upload_deliveries SET status='pending' WHERE target_id=?1 AND status='in_flight'", params![target_id])?;
         Ok(())
     }
 
     pub fn block_target(&self, target_id: &str, id: i64) -> Result<(), StateError> {
-        let c = self.lock()?;
+        let c = self.lock_state()?;
         c.execute(
             "UPDATE upload_deliveries SET status='blocked' WHERE target_id=?1 AND id=?2",
             params![target_id, id],
@@ -461,7 +528,7 @@ impl StateStore {
     }
 
     pub fn cancel_target_delivery(&self, target_id: &str, id: i64) -> Result<(), StateError> {
-        let c = self.lock()?;
+        let c = self.lock_state()?;
         c.execute(
             "UPDATE upload_deliveries SET status='cancelled' WHERE target_id=?1 AND id=?2 AND status IN ('pending','in_flight','blocked')",
             params![target_id, id],
@@ -470,7 +537,7 @@ impl StateStore {
     }
 
     pub fn unblock_target(&self, target_id: &str) -> Result<(), StateError> {
-        let c = self.lock()?;
+        let c = self.lock_state()?;
         c.execute(
             "UPDATE upload_deliveries SET status='pending' WHERE target_id=?1 AND status='blocked'",
             params![target_id],
@@ -483,7 +550,7 @@ impl StateStore {
         target_id: &str,
         device_id: &str,
     ) -> Result<(), StateError> {
-        let c = self.lock()?;
+        let c = self.lock_state()?;
         let rows = c
             .prepare("SELECT id,envelope_json FROM upload_deliveries WHERE target_id=?1 AND status IN ('pending','in_flight')")?
             .query_map(params![target_id], |r| {
@@ -503,13 +570,11 @@ impl StateStore {
     }
 
     pub fn cancel_target_device(&self, target_id: &str, device_id: &str) -> Result<(), StateError> {
-        let c = self.lock()?;
+        let c = self.lock_state()?;
         let rows = c
             .prepare("SELECT id,envelope_json FROM upload_deliveries WHERE target_id=?1 AND status IN ('pending','in_flight')")?
             .query_map(params![target_id], |r| {
-                let id = r.get::<_, i64>(0)?;
-                let raw = r.get::<_, String>(1)?;
-                Ok((id, raw))
+                Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
             })?
             .collect::<Result<Vec<_>, _>>()?;
         for (id, raw) in rows {
@@ -525,15 +590,36 @@ impl StateStore {
     }
 
     pub fn cancel_target(&self, target_id: &str) -> Result<(), StateError> {
-        let c = self.lock()?;
+        let c = self.lock_state()?;
         c.execute(
             "UPDATE upload_deliveries SET status='cancelled' WHERE target_id=?1 AND status IN ('pending','in_flight')",
             params![target_id],
         )?;
         Ok(())
     }
+
+    /// Prunes acknowledged/cancelled delivery rows older than `older_than`
+    /// from the rebuildable state cache and compacts the database. This keeps
+    /// the cache file small even under long-running, high-frequency upload.
+    pub fn cleanup_state_cache(&self, older_than: Duration) -> Result<u64, StateError> {
+        let cutoff = (SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as i64)
+            .saturating_sub(older_than.as_millis() as i64);
+        let c = self.lock_state()?;
+        let removed = c.execute(
+            "DELETE FROM upload_deliveries WHERE status IN ('completed','cancelled') AND created_at_ms < ?1",
+            params![cutoff],
+        )? as u64;
+        let _ = c.execute(
+            "DELETE FROM upload_queue WHERE status IN ('completed','cancelled') AND created_at_ms < ?1",
+            params![cutoff],
+        );
+        let _ = c.execute("VACUUM", []);
+        Ok(removed)
+    }
 }
-use rusqlite::OptionalExtension;
 
 #[allow(dead_code)]
 fn _logging_level(_: LoggingLevel) {}

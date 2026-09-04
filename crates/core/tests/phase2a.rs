@@ -137,7 +137,6 @@ async fn wait_collection_running(runtime: &RuntimeSupervisor) {
 fn config(identity: DeviceIdentity, fixture: &Fixture) -> ClientConfig {
     let mut config = ClientConfig::default();
     config.identity = identity;
-    config.wifi_enabled = true;
     config.scan_interval_seconds = 1;
     config.upload_interval_seconds = 1;
     config.heartbeat_interval_seconds = 1;
@@ -173,7 +172,11 @@ async fn wait_completed(store: &StateStore, device_id: &str, sequence: u64) {
 async fn wifi_event_reaches_upload_delivery_and_completes() {
     let fixture = Fixture::start().await;
     let dir = tempdir().unwrap();
-    let store = StateStore::open(dir.path().join("state.sqlite3")).unwrap();
+    let store = StateStore::open(
+        dir.path().join("state.sqlite3"),
+        dir.path().join("state_cache.sqlite3"),
+    )
+    .unwrap();
     let identity = DeviceIdentity {
         device_id: "wifi-runtime-device".into(),
         device_name: "fixture".into(),
@@ -212,7 +215,11 @@ async fn wifi_event_reaches_upload_delivery_and_completes() {
 async fn wifi_and_bluetooth_snapshots_upload_as_separate_canonical_envelopes() {
     let fixture = Fixture::start().await;
     let dir = tempdir().unwrap();
-    let store = StateStore::open(dir.path().join("state.sqlite3")).unwrap();
+    let store = StateStore::open(
+        dir.path().join("state.sqlite3"),
+        dir.path().join("state_cache.sqlite3"),
+    )
+    .unwrap();
     let identity = DeviceIdentity {
         device_id: "combined-runtime-device".into(),
         device_name: "fixture".into(),
@@ -222,7 +229,6 @@ async fn wifi_and_bluetooth_snapshots_upload_as_separate_canonical_envelopes() {
         hardware: None,
     };
     let mut run_config = config(identity, &fixture);
-    run_config.bluetooth_enabled = true;
     run_config.scan_interval_seconds = 1;
     let wifi_scan: CollectorScan = Arc::new(|| Ok(snapshot_event()));
     let bluetooth_scan: CollectorScan = Arc::new(|| {
@@ -289,7 +295,11 @@ async fn wifi_and_bluetooth_snapshots_upload_as_separate_canonical_envelopes() {
 async fn wifi_delivery_reconnects_with_same_sequence_and_envelope() {
     let fixture = Fixture::start().await;
     let dir = tempdir().unwrap();
-    let store = StateStore::open(dir.path().join("state.sqlite3")).unwrap();
+    let store = StateStore::open(
+        dir.path().join("state.sqlite3"),
+        dir.path().join("state_cache.sqlite3"),
+    )
+    .unwrap();
     let identity = DeviceIdentity {
         device_id: "wifi-recovery-device".into(),
         device_name: "fixture".into(),
@@ -300,7 +310,6 @@ async fn wifi_delivery_reconnects_with_same_sequence_and_envelope() {
     };
     let scan: CollectorScan = Arc::new(|| Ok(snapshot_event()));
     let mut recovery_config = config(identity, &fixture);
-    recovery_config.wifi_enabled = false;
     let mut runtime =
         RuntimeSupervisor::start_with_collector(recovery_config.clone(), store.clone(), Some(scan))
             .unwrap();

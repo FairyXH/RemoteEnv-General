@@ -48,6 +48,7 @@ fn make_bluetooth_scan() -> CollectorScan {
 pub struct AppState {
     runtime: Mutex<Option<RuntimeSupervisor>>,
     state_path: PathBuf,
+    state_cache_path: PathBuf,
     log_path: PathBuf,
     exiting: AtomicBool,
     _instance_guard: SingleInstanceGuard,
@@ -115,8 +116,6 @@ struct DesktopConfigView {
     server_mode: ServerMode,
     active_server_id: Option<String>,
     server_profiles: Vec<ServerProfileView>,
-    wifi_enabled: bool,
-    bluetooth_enabled: bool,
     scan_interval_seconds: u64,
     upload_interval_seconds: u64,
 }
@@ -149,6 +148,12 @@ fn state_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let dir = app.path().app_data_dir().map_err(user_error)?;
     fs::create_dir_all(&dir).map_err(user_error)?;
     Ok(dir.join("state.sqlite3"))
+}
+
+fn state_cache_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let dir = app.path().app_data_dir().map_err(user_error)?;
+    fs::create_dir_all(&dir).map_err(user_error)?;
+    Ok(dir.join("state_cache.sqlite3"))
 }
 
 fn log_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -212,12 +217,60 @@ fn get_log_path(state: State<'_, AppState>) -> String {
     state.log_path.display().to_string()
 }
 
-fn open_store(path: &PathBuf) -> Result<StateStore, String> {
-    StateStore::open(path).map_err(user_error)
+#[derive(serde::Serialize)]
+pub struct StateInfoView {
+    pub config_db_path: String,
+    pub config_db_bytes: u64,
+    pub state_cache_db_path: String,
+    pub state_cache_db_bytes: u64,
 }
 
-fn load_config(path: &PathBuf) -> Result<(StateStore, ClientConfig), String> {
-    let store = open_store(path)?;
+#[derive(serde::Serialize)]
+pub struct CleanupStateCacheResult {
+    pub removed_rows: u64,
+    pub state_cache_db_bytes: u64,
+}
+
+fn file_size_bytes(path: &PathBuf) -> u64 {
+    fs::metadata(path).map(|meta| meta.len()).unwrap_or(0)
+}
+
+/// Reports both database paths and sizes so the UI can show database health.
+/// The user configuration database stays small; the state cache is rebuildable.
+#[tauri::command]
+fn get_state_info(state: State<'_, AppState>) -> StateInfoView {
+    StateInfoView {
+        config_db_path: state.state_path.display().to_string(),
+        config_db_bytes: file_size_bytes(&state.state_path),
+        state_cache_db_path: state.state_cache_path.display().to_string(),
+        state_cache_db_bytes: file_size_bytes(&state.state_cache_path),
+    }
+}
+
+/// Manually prunes acknowledged/cancelled upload cache rows older than 24 hours
+/// and compacts the state cache database. User configuration is never touched.
+/// If the state cache is unreadable it is deleted and rebuilt automatically.
+#[tauri::command]
+fn cleanup_state_cache(state: State<'_, AppState>) -> Result<CleanupStateCacheResult, String> {
+    let store = open_store(&state.state_path, &state.state_cache_path)?;
+    let removed = store
+        .cleanup_state_cache(std::time::Duration::from_secs(24 * 3600))
+        .map_err(user_error)?;
+    Ok(CleanupStateCacheResult {
+        removed_rows: removed,
+        state_cache_db_bytes: file_size_bytes(&state.state_cache_path),
+    })
+}
+
+fn open_store(config_path: &PathBuf, state_cache_path: &PathBuf) -> Result<StateStore, String> {
+    StateStore::open(config_path, state_cache_path).map_err(user_error)
+}
+
+fn load_config(
+    path: &PathBuf,
+    state_cache_path: &PathBuf,
+) -> Result<(StateStore, ClientConfig), String> {
+    let store = open_store(path, state_cache_path)?;
     let mut config = store.load_config().map_err(user_error)?.unwrap_or_default();
     for profile in &mut config.server_profiles {
         profile.token = protect::decrypt(&profile.token).map_err(user_error)?;
@@ -364,8 +417,6 @@ fn config_view(config: &ClientConfig) -> DesktopConfigView {
                 enabled: profile.enabled,
             })
             .collect(),
-        wifi_enabled: config.wifi_enabled,
-        bluetooth_enabled: config.bluetooth_enabled,
         scan_interval_seconds: config.scan_interval_seconds,
         upload_interval_seconds: config.upload_interval_seconds,
     }
@@ -407,10 +458,11 @@ fn get_runtime_status(state: State<'_, AppState>) -> Result<RuntimeStatus, Strin
 
 #[tauri::command]
 fn get_desktop_config(state: State<'_, AppState>) -> Result<DesktopConfigView, String> {
-    let (_, config) = load_config(&state.state_path).map_err(|message| {
-        error(format!("get_desktop_config 失败: {message}"));
-        message
-    })?;
+    let (_, config) =
+        load_config(&state.state_path, &state.state_cache_path).map_err(|message| {
+            error(format!("get_desktop_config 失败: {message}"));
+            message
+        })?;
     Ok(config_view(&config))
 }
 
@@ -419,7 +471,7 @@ fn save_server_profile(
     input: ServerProfileInput,
     state: State<'_, AppState>,
 ) -> Result<DesktopConfigView, String> {
-    let (store, mut config) = load_config(&state.state_path)?;
+    let (store, mut config) = load_config(&state.state_path, &state.state_cache_path)?;
     let name = input.name.trim();
     let url = input.url.trim();
     let device_id = input.device_id.as_deref().unwrap_or("").trim();
@@ -473,7 +525,7 @@ fn disconnect_server_profile(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<RuntimeStatus, String> {
-    let (store, mut config) = load_config(&state.state_path)?;
+    let (store, mut config) = load_config(&state.state_path, &state.state_cache_path)?;
     let Some(profile) = config
         .server_profiles
         .iter_mut()
@@ -503,7 +555,7 @@ fn set_server_enabled(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<RuntimeStatus, String> {
-    let (store, mut config) = load_config(&state.state_path)?;
+    let (store, mut config) = load_config(&state.state_path, &state.state_cache_path)?;
     if let Some(profile) = config
         .server_profiles
         .iter_mut()
@@ -531,7 +583,7 @@ fn delete_server_profile(
     id: String,
     state: State<'_, AppState>,
 ) -> Result<DesktopConfigView, String> {
-    let (store, mut config) = load_config(&state.state_path)?;
+    let (store, mut config) = load_config(&state.state_path, &state.state_cache_path)?;
     config.server_profiles.retain(|profile| profile.id != id);
     if config.active_server_id.as_deref() == Some(&id) {
         config.active_server_id = config
@@ -549,8 +601,6 @@ fn delete_server_profile(
 fn set_runtime_options(
     server_mode: ServerMode,
     active_server_id: Option<String>,
-    wifi_enabled: bool,
-    bluetooth_enabled: bool,
     scan_interval_seconds: u64,
     upload_interval_seconds: u64,
     state: State<'_, AppState>,
@@ -562,11 +612,9 @@ fn set_runtime_options(
     {
         return Err("扫描间隔和上传间隔必须在 1 到 3600 秒之间。".into());
     }
-    let (store, mut config) = load_config(&state.state_path)?;
+    let (store, mut config) = load_config(&state.state_path, &state.state_cache_path)?;
     config.server_mode = server_mode;
     config.active_server_id = active_server_id;
-    config.wifi_enabled = wifi_enabled;
-    config.bluetooth_enabled = bluetooth_enabled;
     config.scan_interval_seconds = scan_interval_seconds;
     config.upload_interval_seconds = upload_interval_seconds;
     if config.server_mode == ServerMode::Single && !config.server_profiles.is_empty() {
@@ -606,7 +654,7 @@ fn connect_server_profile(
     state: State<'_, AppState>,
 ) -> Result<RuntimeStatus, String> {
     info(format!("收到服务器连接请求 profile_id={id}"));
-    let (store, mut config) = load_config(&state.state_path)?;
+    let (store, mut config) = load_config(&state.state_path, &state.state_cache_path)?;
     let profile = config
         .server_profiles
         .iter()
@@ -743,7 +791,7 @@ async fn test_server_profile(
     state: State<'_, AppState>,
 ) -> Result<ConnectionTestResult, String> {
     info(format!("收到服务器测试请求 profile_id={id}"));
-    let (_, config) = load_config(&state.state_path)?;
+    let (_, config) = load_config(&state.state_path, &state.state_cache_path)?;
     let profile = config
         .server_profiles
         .iter()
@@ -809,7 +857,7 @@ fn start_runtime(
     state: State<'_, AppState>,
 ) -> Result<RuntimeStatus, String> {
     info("收到启动采集服务请求");
-    let (store, config) = load_config(&state.state_path)?;
+    let (store, config) = load_config(&state.state_path, &state.state_cache_path)?;
     if config.selected_servers().is_empty() {
         return Err("请先新增并启用至少一个服务器配置。".into());
     }
@@ -959,14 +1007,19 @@ pub fn run(tray_start: bool) {
     tauri::Builder::default()
         .setup(move |app| {
             let path = state_path(&app.handle()).map_err(|error| std::io::Error::other(error))?;
+            let cache =
+                state_cache_path(&app.handle()).map_err(|error| std::io::Error::other(error))?;
+            let log = log_path(&app.handle()).map_err(|error| std::io::Error::other(error))?;
+            let guard = acquire_instance_guard().map_err(std::io::Error::other)?;
             app.manage(AppState {
                 runtime: Mutex::new(None),
-                state_path: path.clone(),
-                log_path: log_path(&app.handle()).map_err(|error| std::io::Error::other(error))?,
+                state_path: path,
+                state_cache_path: cache,
+                log_path: log.clone(),
                 exiting: AtomicBool::new(false),
-                _instance_guard: acquire_instance_guard().map_err(std::io::Error::other)?,
+                _instance_guard: guard,
             });
-            init_logging(log_path(&app.handle()).map_err(|error| std::io::Error::other(error))?);
+            init_logging(log);
             info("应用启动");
             let open = MenuItem::with_id(app, "open", "打开主窗口", true, None::<&str>)?;
             let start = MenuItem::with_id(app, "start", "启动采集服务", true, None::<&str>)?;
@@ -1038,6 +1091,8 @@ pub fn run(tray_start: bool) {
             scan_wifi_now,
             scan_bluetooth_now,
             test_server_profile,
+            get_state_info,
+            cleanup_state_cache,
             start_runtime,
             stop_runtime
         ])

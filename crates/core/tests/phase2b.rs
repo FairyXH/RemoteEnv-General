@@ -173,7 +173,6 @@ fn config(url: String) -> ClientConfig {
         client_version: "1".into(),
         hardware: None,
     };
-    config.bluetooth_enabled = true;
     config.scan_interval_seconds = 1;
     config.upload_interval_seconds = 1;
     config.heartbeat_interval_seconds = 1;
@@ -193,7 +192,11 @@ fn config(url: String) -> ClientConfig {
 async fn bluetooth_event_uses_shared_sequence_and_completes_delivery() {
     let (url, received) = fixture().await;
     let dir = tempdir().unwrap();
-    let store = StateStore::open(dir.path().join("state.sqlite3")).unwrap();
+    let store = StateStore::open(
+        dir.path().join("state.sqlite3"),
+        dir.path().join("state_cache.sqlite3"),
+    )
+    .unwrap();
     let scan = Arc::new(|| {
         Ok(CollectorEvent {
             data_type: "bluetooth".into(),
@@ -266,7 +269,11 @@ async fn bluetooth_multi_server_ack_isolation_and_recovery_preserve_envelope() {
     let a = controlled_fixture().await;
     let b = controlled_fixture().await;
     let dir = tempdir().unwrap();
-    let store = StateStore::open(dir.path().join("state.sqlite3")).unwrap();
+    let store = StateStore::open(
+        dir.path().join("state.sqlite3"),
+        dir.path().join("state_cache.sqlite3"),
+    )
+    .unwrap();
     let mut config = ClientConfig::default();
     config.identity = DeviceIdentity {
         device_id: "phase2b-multi-device".into(),
@@ -277,7 +284,6 @@ async fn bluetooth_multi_server_ack_isolation_and_recovery_preserve_envelope() {
         hardware: None,
     };
     config.server_mode = ServerMode::Multi;
-    config.bluetooth_enabled = false;
     config.scan_interval_seconds = 1;
     config.upload_interval_seconds = 1;
     config.heartbeat_interval_seconds = 1;
@@ -380,10 +386,14 @@ async fn bluetooth_multi_server_ack_isolation_and_recovery_preserve_envelope() {
 }
 
 #[tokio::test]
-async fn bluetooth_dynamic_enable_disable_reuses_one_worker() {
+async fn bluetooth_keeps_collecting_across_config_updates() {
     let (url, _received) = fixture().await;
     let dir = tempdir().unwrap();
-    let store = StateStore::open(dir.path().join("state.sqlite3")).unwrap();
+    let store = StateStore::open(
+        dir.path().join("state.sqlite3"),
+        dir.path().join("state_cache.sqlite3"),
+    )
+    .unwrap();
     let calls = Arc::new(AtomicUsize::new(0));
     let calls_for_scan = Arc::clone(&calls);
     let scan = Arc::new(move || {
@@ -395,18 +405,14 @@ async fn bluetooth_dynamic_enable_disable_reuses_one_worker() {
         })
     }) as Arc<dyn Fn() -> Result<CollectorEvent, String> + Send + Sync>;
     let mut config = config(url);
-    config.bluetooth_enabled = false;
     config.scan_interval_seconds = 1;
     let mut runtime =
         RuntimeSupervisor::start_with_collectors(config.clone(), store, None, Some(scan)).unwrap();
     runtime
         .set_collection_running(config.clone(), true)
         .unwrap();
-    tokio::time::sleep(Duration::from_millis(1200)).await;
-    assert_eq!(calls.load(Ordering::SeqCst), 0);
-    let mut enabled = config.clone();
-    enabled.bluetooth_enabled = true;
-    runtime.update_config(enabled.clone()).unwrap();
+    // Collection is always enabled: the worker starts scanning as soon as the
+    // runtime is running, with no per-collector switch involved.
     tokio::time::timeout(Duration::from_secs(3), async {
         while calls.load(Ordering::SeqCst) == 0 {
             tokio::time::sleep(Duration::from_millis(20)).await;
@@ -414,15 +420,23 @@ async fn bluetooth_dynamic_enable_disable_reuses_one_worker() {
     })
     .await
     .unwrap();
-    let before_disable = calls.load(Ordering::SeqCst);
-    let mut disabled = enabled;
-    disabled.bluetooth_enabled = false;
-    runtime.update_config(disabled).unwrap();
-    tokio::time::sleep(Duration::from_millis(1200)).await;
-    assert_eq!(calls.load(Ordering::SeqCst), before_disable);
-    assert_eq!(
+    let before_update = calls.load(Ordering::SeqCst);
+    // A config update (different scan interval) must reuse the same worker and
+    // keep collecting instead of restarting or pausing collection.
+    let mut updated = config.clone();
+    updated.scan_interval_seconds = 2;
+    runtime.update_config(updated).unwrap();
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while calls.load(Ordering::SeqCst) <= before_update {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(matches!(
         runtime.status().bluetooth_runtime.state,
-        remote_env_core::runtime::WiFiRuntimeState::Disabled
-    );
+        remote_env_core::runtime::WiFiRuntimeState::Ready
+            | remote_env_core::runtime::WiFiRuntimeState::Scanning
+    ));
     runtime.stop();
 }

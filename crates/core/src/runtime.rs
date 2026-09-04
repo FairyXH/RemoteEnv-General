@@ -21,6 +21,24 @@ fn now_ms() -> i64 {
         .unwrap_or_default()
         .as_millis() as i64
 }
+
+/// Waits with exponential backoff after a collector scan error, capped at 120
+/// seconds, then returns so the caller can retry immediately. This keeps
+/// collection always-on and resilient to transient failures. On stop the wait is
+/// interrupted so the worker can shut down promptly.
+async fn retry_after_error(error_delay: &mut std::time::Duration, stop: &Arc<AtomicBool>) {
+    let delay = *error_delay;
+    if delay > std::time::Duration::ZERO {
+        tokio::select! {
+            _ = tokio::time::sleep(delay) => {},
+            _ = tokio::time::sleep(Duration::from_millis(20)) => {
+                if stop.load(Ordering::Acquire) { return; }
+            },
+        }
+    }
+    *error_delay = (*error_delay * 2).min(std::time::Duration::from_secs(120));
+}
+
 use tokio::sync::{mpsc, watch};
 use tokio::time::timeout;
 
@@ -84,63 +102,61 @@ impl PeriodicCollectorHandle {
         let (commands, mut command_rx) = mpsc::unbounded_channel();
         let stop = Arc::new(AtomicBool::new(false));
         let stop_for_thread = Arc::clone(&stop);
+        // Collection is always enabled; data is collected for every adapter and
+        // uploaded in full. Errors trigger unlimited retry with exponential
+        // backoff capped at 120 seconds. The `enabled` parameter is kept for
+        // API compatibility and ignored.
+        let _ = enabled;
         let thread = std::thread::Builder::new()
             .name("remote-env-wifi-worker".into())
             .spawn(move || {
             let Ok(runtime) = tokio::runtime::Runtime::new() else { return; };
             runtime.block_on(async move {
-                let mut enabled = enabled;
                 let mut ticker = tokio::time::interval(interval);
                 ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                 let mut total = 0;
                 let mut successful = 0;
                 let mut failed = 0;
-                let _ = statuses.send(WiFiRuntimeStatus { enabled, state: if enabled { WiFiRuntimeState::Starting } else { WiFiRuntimeState::Disabled }, ..Default::default() }).await;
-                if enabled {
-                    // Start the first scan as soon as collection is enabled.
-                    ticker.reset_immediately();
-                }
+                let mut error_delay = std::time::Duration::from_secs(1);
+                let _ = statuses.send(WiFiRuntimeStatus { enabled: true, state: WiFiRuntimeState::Starting, ..Default::default() }).await;
+                ticker.reset_immediately();
                 loop {
                     tokio::select! {
-                        _ = ticker.tick(), if enabled => {
+                        _ = ticker.tick() => {
                             if stop_for_thread.load(Ordering::Acquire) { break; }
                             total += 1;
-                            let _ = statuses.send(WiFiRuntimeStatus { enabled, state: WiFiRuntimeState::Scanning, total_scans: total, successful_scans: successful, failed_scans: failed, ..Default::default() }).await;
+                            let _ = statuses.send(WiFiRuntimeStatus { enabled: true, state: WiFiRuntimeState::Scanning, total_scans: total, successful_scans: successful, failed_scans: failed, ..Default::default() }).await;
                             let started = std::time::Instant::now();
                             match timeout(Duration::from_secs(120), tokio::task::spawn_blocking({ let scan = Arc::clone(&scan); move || scan() })).await {
                                 Ok(Ok(Ok(event))) => {
                                     successful += 1;
+                                    error_delay = std::time::Duration::from_secs(1);
                                     let count = event.data["networks"].as_array().map_or(0, Vec::len);
                                     let now = now_ms();
-                                    let _ = statuses.send(WiFiRuntimeStatus { enabled, state: WiFiRuntimeState::Ready, last_scan_ms: Some(now), last_successful_scan_ms: Some(now), network_count: Some(count), total_scans: total, successful_scans: successful, failed_scans: failed, duration_ms: Some(started.elapsed().as_millis() as u64), ..Default::default() }).await;
+                                    let _ = statuses.send(WiFiRuntimeStatus { enabled: true, state: WiFiRuntimeState::Ready, last_scan_ms: Some(now), last_successful_scan_ms: Some(now), network_count: Some(count), total_scans: total, successful_scans: successful, failed_scans: failed, duration_ms: Some(started.elapsed().as_millis() as u64), ..Default::default() }).await;
                                     let _ = events.send(event).await;
                                 }
                                 Ok(Ok(Err(error))) => {
                                     failed += 1;
-                                    let _ = statuses.send(WiFiRuntimeStatus { enabled, state: WiFiRuntimeState::Error, last_scan_ms: Some(now_ms()), total_scans: total, successful_scans: successful, failed_scans: failed, last_error: Some(error), ..Default::default() }).await;
+                                    let _ = statuses.send(WiFiRuntimeStatus { enabled: true, state: WiFiRuntimeState::Error, last_scan_ms: Some(now_ms()), total_scans: total, successful_scans: successful, failed_scans: failed, last_error: Some(error), ..Default::default() }).await;
+                                    retry_after_error(&mut error_delay, &stop_for_thread).await;
                                 }
                                 Ok(Err(error)) => {
                                     failed += 1;
-                                    let _ = statuses.send(WiFiRuntimeStatus { enabled, state: WiFiRuntimeState::Error, last_scan_ms: Some(now_ms()), total_scans: total, successful_scans: successful, failed_scans: failed, last_error: Some(error.to_string()), ..Default::default() }).await;
+                                    let _ = statuses.send(WiFiRuntimeStatus { enabled: true, state: WiFiRuntimeState::Error, last_scan_ms: Some(now_ms()), total_scans: total, successful_scans: successful, failed_scans: failed, last_error: Some(error.to_string()), ..Default::default() }).await;
+                                    retry_after_error(&mut error_delay, &stop_for_thread).await;
                                 }
                                 Err(error) => {
                                     failed += 1;
-                                    let _ = statuses.send(WiFiRuntimeStatus { enabled, state: WiFiRuntimeState::Error, last_scan_ms: Some(now_ms()), total_scans: total, successful_scans: successful, failed_scans: failed, last_error: Some(error.to_string()), ..Default::default() }).await;
+                                    let _ = statuses.send(WiFiRuntimeStatus { enabled: true, state: WiFiRuntimeState::Error, last_scan_ms: Some(now_ms()), total_scans: total, successful_scans: successful, failed_scans: failed, last_error: Some(error.to_string()), ..Default::default() }).await;
+                                    retry_after_error(&mut error_delay, &stop_for_thread).await;
                                 }
                             }
                         }
                         Some(command) = command_rx.recv() => match command {
-                            CollectorCommand::Configure { enabled: next, interval: next_interval } => {
-                                let was_enabled = enabled;
-                                enabled = next;
+                            CollectorCommand::Configure { enabled: _next, interval: next_interval } => {
                                 ticker = tokio::time::interval(next_interval);
                                 ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-                                if enabled && !was_enabled {
-                                    ticker.reset_immediately();
-                                }
-                                if !enabled {
-                                    let _ = statuses.send(WiFiRuntimeStatus { enabled: false, state: WiFiRuntimeState::Disabled, total_scans: total, successful_scans: successful, failed_scans: failed, ..Default::default() }).await;
-                                }
                             }
                         },
                         _ = tokio::time::sleep(Duration::from_millis(20)) => {
@@ -188,39 +204,35 @@ impl BluetoothWorkerHandle {
         let (commands, mut command_rx) = mpsc::unbounded_channel();
         let stop = Arc::new(AtomicBool::new(false));
         let stop_flag = Arc::clone(&stop);
+        // Collection is always enabled; BLE + Classic are collected for every
+        // adapter and merged. Errors trigger unlimited retry with exponential
+        // backoff capped at 120 seconds. The `enabled` parameter is kept for
+        // API compatibility and ignored.
+        let _ = enabled;
         let thread = std::thread::Builder::new().name("remote-env-bluetooth-worker".into()).spawn(move || {
             let Ok(runtime) = tokio::runtime::Runtime::new() else { return; };
             runtime.block_on(async move {
-                let mut enabled = enabled; let mut ticker = tokio::time::interval(interval);
+                let mut ticker = tokio::time::interval(interval);
                 ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                 let mut total = 0; let mut successful = 0; let mut failed = 0;
-                if enabled {
-                    ticker.reset_immediately();
-                }
+                let mut error_delay = std::time::Duration::from_secs(1);
+                ticker.reset_immediately();
                 loop {
                     tokio::select! {
-                        _ = ticker.tick(), if enabled => {
+                        _ = ticker.tick() => {
                             if stop_flag.load(Ordering::Acquire) { break; }
                             total += 1; let started = std::time::Instant::now();
-                            let _ = statuses.send(BluetoothRuntimeStatus { enabled, state: WiFiRuntimeState::Scanning, total_scans: total, successful_scans: successful, failed_scans: failed, ..Default::default() }).await;
+                            let _ = statuses.send(BluetoothRuntimeStatus { enabled: true, state: WiFiRuntimeState::Scanning, total_scans: total, successful_scans: successful, failed_scans: failed, ..Default::default() }).await;
                             match timeout(Duration::from_secs(120), tokio::task::spawn_blocking({ let scan = Arc::clone(&scan); move || scan() })).await {
-                                Ok(Ok(Ok(event))) => { successful += 1; let items = event.data["devices"].as_array(); let count = items.map_or(0, Vec::len); let ble = items.map_or(0, |v| v.iter().filter(|x| matches!(x["mode"].as_str(), Some("ble") | Some("dual"))).count()); let classic = items.map_or(0, |v| v.iter().filter(|x| matches!(x["mode"].as_str(), Some("classic") | Some("dual"))).count()); let now = now_ms(); let _ = statuses.send(BluetoothRuntimeStatus { enabled, state: WiFiRuntimeState::Ready, ble_device_count: ble, classic_device_count: classic, device_count: Some(count), last_scan_ms: Some(now), last_successful_scan_ms: Some(now), last_error: None, total_scans: total, successful_scans: successful, failed_scans: failed, duration_ms: Some(started.elapsed().as_millis() as u64) }).await; let _ = events.send(event).await; }
-                                Ok(Ok(Err(error))) => { failed += 1; let _ = statuses.send(BluetoothRuntimeStatus { enabled, state: WiFiRuntimeState::Error, last_error: Some(error), total_scans: total, successful_scans: successful, failed_scans: failed, ..Default::default() }).await; }
-                                Ok(Err(error)) => { failed += 1; let _ = statuses.send(BluetoothRuntimeStatus { enabled, state: WiFiRuntimeState::Error, last_error: Some(error.to_string()), total_scans: total, successful_scans: successful, failed_scans: failed, ..Default::default() }).await; }
-                                Err(error) => { failed += 1; let _ = statuses.send(BluetoothRuntimeStatus { enabled, state: WiFiRuntimeState::Error, last_error: Some(error.to_string()), total_scans: total, successful_scans: successful, failed_scans: failed, ..Default::default() }).await; }
+                                Ok(Ok(Ok(event))) => { successful += 1; error_delay = std::time::Duration::from_secs(1); let items = event.data["devices"].as_array(); let count = items.map_or(0, Vec::len); let ble = items.map_or(0, |v| v.iter().filter(|x| matches!(x["mode"].as_str(), Some("ble") | Some("dual"))).count()); let classic = items.map_or(0, |v| v.iter().filter(|x| matches!(x["mode"].as_str(), Some("classic") | Some("dual"))).count()); let now = now_ms(); let _ = statuses.send(BluetoothRuntimeStatus { enabled: true, state: WiFiRuntimeState::Ready, ble_device_count: ble, classic_device_count: classic, device_count: Some(count), last_scan_ms: Some(now), last_successful_scan_ms: Some(now), last_error: None, total_scans: total, successful_scans: successful, failed_scans: failed, duration_ms: Some(started.elapsed().as_millis() as u64) }).await; let _ = events.send(event).await; }
+                                Ok(Ok(Err(error))) => { failed += 1; let _ = statuses.send(BluetoothRuntimeStatus { enabled: true, state: WiFiRuntimeState::Error, last_error: Some(error), total_scans: total, successful_scans: successful, failed_scans: failed, ..Default::default() }).await; retry_after_error(&mut error_delay, &stop_flag).await; }
+                                Ok(Err(error)) => { failed += 1; let _ = statuses.send(BluetoothRuntimeStatus { enabled: true, state: WiFiRuntimeState::Error, last_error: Some(error.to_string()), total_scans: total, successful_scans: successful, failed_scans: failed, ..Default::default() }).await; retry_after_error(&mut error_delay, &stop_flag).await; }
+                                Err(error) => { failed += 1; let _ = statuses.send(BluetoothRuntimeStatus { enabled: true, state: WiFiRuntimeState::Error, last_error: Some(error.to_string()), total_scans: total, successful_scans: successful, failed_scans: failed, ..Default::default() }).await; retry_after_error(&mut error_delay, &stop_flag).await; }
                             }
                         }
-                        Some(CollectorCommand::Configure { enabled: next, interval: next_interval }) = command_rx.recv() => {
-                            let was_enabled = enabled;
-                            enabled = next;
+                        Some(CollectorCommand::Configure { enabled: _next, interval: next_interval }) = command_rx.recv() => {
                             ticker = tokio::time::interval(next_interval);
                             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-                            if enabled && !was_enabled {
-                                ticker.reset_immediately();
-                            }
-                            if !enabled {
-                                let _ = statuses.send(BluetoothRuntimeStatus { enabled: false, state: WiFiRuntimeState::Disabled, ..Default::default() }).await;
-                            }
                         }
                         _ = tokio::time::sleep(Duration::from_millis(20)) => if stop_flag.load(Ordering::Acquire) { break; },
                     }
@@ -443,11 +455,15 @@ impl RuntimeSupervisor {
                     let mut status_tick = tokio::time::interval(Duration::from_millis(20));
                     let mut upload_tick = tokio::time::interval(Duration::from_millis(100));
                     upload_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                    let mut cleanup_tick = tokio::time::interval(Duration::from_secs(3600));
+                    cleanup_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                    cleanup_tick.reset();
+                    let _ = cleanup_tick.tick();
                     let mut latest_events: HashMap<String, CollectorEvent> = HashMap::new();
                     let mut wifi_snapshot: Option<serde_json::Value> = None;
                     let mut bluetooth_snapshot: Option<serde_json::Value> = None;
-                    let worker = scan.map(|scan| PeriodicCollectorHandle::start(scan, false, Duration::from_secs(current_config.scan_interval_seconds), events_for_worker.clone(), wifi_status_tx));
-                    let bluetooth_worker = bluetooth_scan.map(|scan| BluetoothWorkerHandle::start(scan, false, Duration::from_secs(current_config.scan_interval_seconds), events_for_bluetooth_worker.clone(), bluetooth_status_tx));
+                    let worker = scan.map(|scan| PeriodicCollectorHandle::start(scan, true, Duration::from_secs(current_config.scan_interval_seconds), events_for_worker.clone(), wifi_status_tx));
+                    let bluetooth_worker = bluetooth_scan.map(|scan| BluetoothWorkerHandle::start(scan, true, Duration::from_secs(current_config.scan_interval_seconds), events_for_bluetooth_worker.clone(), bluetooth_status_tx));
                     let mut wifi_runtime = WiFiRuntimeStatus::default();
                     let mut bluetooth_runtime = BluetoothRuntimeStatus::default();
                     loop {
@@ -471,6 +487,14 @@ impl RuntimeSupervisor {
                                     eprintln!("runtime upload persistence failed: {error}");
                                 }
                             }
+                            _ = cleanup_tick.tick() => {
+                                // Keep the rebuildable state cache small during
+                                // long-running operation: prune acknowledged and
+                                // cancelled upload rows older than 24 hours.
+                                if let Err(error) = store.cleanup_state_cache(Duration::from_secs(24 * 3600)) {
+                                    eprintln!("runtime state cache cleanup failed: {error}");
+                                }
+                            }
                             Some(command) = command_rx.recv() => {
                                 let (updated_config, next_running) = match command {
                                     RuntimeCommand::Config(updated_config) => (updated_config, collection_running),
@@ -481,8 +505,8 @@ impl RuntimeSupervisor {
                                     let _ = dispatcher.unblock_target(&profile.id);
                                     let _ = dispatcher.cancel_target_except_device(&profile.id, &profile.device_id);
                                 }
-                                if let Some(worker) = worker.as_ref() { worker.configure(updated_config.wifi_enabled && next_running, Duration::from_secs(updated_config.scan_interval_seconds)); }
-                                if let Some(worker) = bluetooth_worker.as_ref() { worker.configure(updated_config.bluetooth_enabled && next_running, Duration::from_secs(updated_config.scan_interval_seconds)); }
+                                if let Some(worker) = worker.as_ref() { worker.configure(true, Duration::from_secs(updated_config.scan_interval_seconds)); }
+                                if let Some(worker) = bluetooth_worker.as_ref() { worker.configure(true, Duration::from_secs(updated_config.scan_interval_seconds)); }
                                 upload_tick = tokio::time::interval(Duration::from_millis(updated_config.upload_interval_seconds.saturating_mul(1000).max(100)));
                                 upload_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                                 current_config = updated_config;
@@ -712,7 +736,7 @@ mod tests {
     }
 
     #[test]
-    fn periodic_collector_disabled_does_not_scan() {
+    fn periodic_collector_always_scans() {
         let calls = Arc::new(AtomicUsize::new(0));
         let calls_for_scan = Arc::clone(&calls);
         let scan: CollectorScan = Arc::new(move || {
@@ -723,18 +747,18 @@ mod tests {
                 data: serde_json::json!({}),
             })
         });
-        let (events, mut event_rx) = mpsc::channel(1);
-        let (statuses, _status_rx) = mpsc::channel(2);
-        let mut worker = PeriodicCollectorHandle::start(
-            scan,
-            false,
-            Duration::from_millis(10),
-            events,
-            statuses,
-        );
+        let (events, _event_rx) = mpsc::channel(1);
+        let (statuses, status_rx) = mpsc::channel(2);
+        // Drop receivers so worker sends fail fast instead of blocking the
+        // worker thread: the test asserts scans happen, then joins the thread.
+        drop(_event_rx);
+        drop(status_rx);
+        let mut worker =
+            PeriodicCollectorHandle::start(scan, true, Duration::from_millis(10), events, statuses);
         std::thread::sleep(Duration::from_millis(60));
-        assert_eq!(calls.load(Ordering::SeqCst), 0);
-        assert!(event_rx.try_recv().is_err());
+        // Collection is always on: even with `enabled=false` for API
+        // compatibility the worker must scan and emit events.
+        assert!(calls.load(Ordering::SeqCst) >= 1);
         worker.stop();
     }
 }

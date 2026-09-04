@@ -17,13 +17,14 @@ use tokio_tungstenite::{accept_async, tungstenite::Message};
 fn sequence_is_atomic_and_survives_reopen() {
     let dir = tempdir().unwrap();
     let path = dir.path().join("state.sqlite3");
-    let store = StateStore::open(&path).unwrap();
+    let cache = dir.path().join("state_cache.sqlite3");
+    let store = StateStore::open(&path, &cache).unwrap();
     let first = store.next_sequence("device-a", "wifi").unwrap();
     assert!(first >= 1_700_000_000_000);
     let second = store.next_sequence("device-a", "wifi").unwrap();
     assert!(second > first);
     drop(store);
-    let reopened = StateStore::open(&path).unwrap();
+    let reopened = StateStore::open(&path, &cache).unwrap();
     let third = reopened.next_sequence("device-a", "wifi").unwrap();
     assert!(third > second);
     reopened.recover_sequence("device-a", "wifi", 10).unwrap();
@@ -33,7 +34,11 @@ fn sequence_is_atomic_and_survives_reopen() {
 #[test]
 fn identity_is_created_once_and_config_is_round_trippable() {
     let dir = tempdir().unwrap();
-    let store = StateStore::open(dir.path().join("state.sqlite3")).unwrap();
+    let store = StateStore::open(
+        dir.path().join("state.sqlite3"),
+        dir.path().join("state_cache.sqlite3"),
+    )
+    .unwrap();
     let first = store
         .load_or_create_identity("Desktop", "windows", "1.0")
         .unwrap();
@@ -49,8 +54,6 @@ fn identity_is_created_once_and_config_is_round_trippable() {
         server_mode: remote_env_core::config::ServerMode::Single,
         active_server_id: None,
         identity: first,
-        wifi_enabled: true,
-        bluetooth_enabled: false,
         scan_interval_seconds: 30,
         upload_interval_seconds: 30,
         heartbeat_interval_seconds: 5,
@@ -68,7 +71,11 @@ fn identity_is_created_once_and_config_is_round_trippable() {
 #[test]
 fn queue_is_bounded_and_ack_requires_exact_identity() {
     let dir = tempdir().unwrap();
-    let store = StateStore::open(dir.path().join("state.sqlite3")).unwrap();
+    let store = StateStore::open(
+        dir.path().join("state.sqlite3"),
+        dir.path().join("state_cache.sqlite3"),
+    )
+    .unwrap();
     let queue = UploadQueue::new(store, 1);
     let envelope =
         EnvironmentEnvelope::new("device-a", "wifi", 1, serde_json::json!({"networks": []}));
@@ -169,7 +176,11 @@ fn protocol_serializes_server_envelope_and_classifies_sequence_error() {
 #[test]
 fn queue_recovery_resets_in_flight_items() {
     let dir = tempdir().unwrap();
-    let store = StateStore::open(dir.path().join("state.sqlite3")).unwrap();
+    let store = StateStore::open(
+        dir.path().join("state.sqlite3"),
+        dir.path().join("state_cache.sqlite3"),
+    )
+    .unwrap();
     let queue = UploadQueue::new(store, 10);
     let envelope = EnvironmentEnvelope::new("device-a", "wifi", 1, serde_json::json!({}));
     queue.enqueue(&envelope).unwrap();
@@ -204,7 +215,11 @@ fn transport_classifies_ack_errors_and_heartbeat_contract() {
 #[test]
 fn runtime_assigns_sequence_and_queues_mock_event_without_claiming_real_scan() {
     let dir = tempdir().unwrap();
-    let store = StateStore::open(dir.path().join("state.sqlite3")).unwrap();
+    let store = StateStore::open(
+        dir.path().join("state.sqlite3"),
+        dir.path().join("state_cache.sqlite3"),
+    )
+    .unwrap();
     let mut runtime = remote_env_core::runtime::Runtime::new("device-a", store, 10);
     let envelope = runtime
         .submit_event(CollectorEvent {
@@ -269,7 +284,11 @@ async fn websocket_fixture_authenticates_uploads_and_requires_matching_ack() {
         socket.close(None).await.unwrap();
     });
     let dir = tempdir().unwrap();
-    let store = StateStore::open(dir.path().join("state.sqlite3")).unwrap();
+    let store = StateStore::open(
+        dir.path().join("state.sqlite3"),
+        dir.path().join("state_cache.sqlite3"),
+    )
+    .unwrap();
     let queue = UploadQueue::new(store, 10);
     let envelope =
         EnvironmentEnvelope::new("device-a", "wifi", 1, serde_json::json!({"mock": true}));
@@ -335,7 +354,11 @@ async fn real_backend_smoke_test_uses_only_runtime_environment_configuration() {
         .and_then(|value| value.parse::<u64>().ok())
         .expect("REMOTE_ENV_TEST_SEQUENCE is required");
     let dir = tempdir().unwrap();
-    let store = StateStore::open(dir.path().join("state.sqlite3")).unwrap();
+    let store = StateStore::open(
+        dir.path().join("state.sqlite3"),
+        dir.path().join("state_cache.sqlite3"),
+    )
+    .unwrap();
     let queue = UploadQueue::new(store, 10);
     let envelope = EnvironmentEnvelope::new(
         &device_id,
@@ -367,7 +390,11 @@ async fn real_backend_smoke_test_uses_only_runtime_environment_configuration() {
 #[test]
 fn dispatcher_resolves_targets_and_acknowledges_only_the_selected_server() {
     let dir = tempdir().unwrap();
-    let store = StateStore::open(dir.path().join("state.sqlite3")).unwrap();
+    let store = StateStore::open(
+        dir.path().join("state.sqlite3"),
+        dir.path().join("state_cache.sqlite3"),
+    )
+    .unwrap();
     let dispatcher = UploadDispatcher::new(store);
     let mut config = ClientConfig::default();
     config.server_profiles = vec![
@@ -429,7 +456,11 @@ fn dispatcher_resolves_targets_and_acknowledges_only_the_selected_server() {
 #[test]
 fn dispatcher_cancels_removed_target_and_caps_retry_delay() {
     let dir = tempdir().unwrap();
-    let store = StateStore::open(dir.path().join("state.sqlite3")).unwrap();
+    let store = StateStore::open(
+        dir.path().join("state.sqlite3"),
+        dir.path().join("state_cache.sqlite3"),
+    )
+    .unwrap();
     let dispatcher = UploadDispatcher::new(store);
     let mut config = ClientConfig::default();
     config.server_profiles = vec![remote_env_core::config::ServerProfile {
@@ -460,7 +491,11 @@ fn dispatcher_cancels_removed_target_and_caps_retry_delay() {
 #[test]
 fn invalid_queue_capacity_is_rejected() {
     let dir = tempdir().unwrap();
-    let store = StateStore::open(dir.path().join("state.sqlite3")).unwrap();
+    let store = StateStore::open(
+        dir.path().join("state.sqlite3"),
+        dir.path().join("state_cache.sqlite3"),
+    )
+    .unwrap();
     assert!(matches!(
         UploadQueue::try_new(store, 0),
         Err(QueueError::InvalidCapacity)

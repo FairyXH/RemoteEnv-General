@@ -336,7 +336,11 @@ async fn phase_175c_runtime_uses_independent_dual_servers_and_recovery() {
     let a = TestServer::start().await;
     let b = TestServer::start().await;
     let dir = tempdir().unwrap();
-    let store = StateStore::open(dir.path().join("state.sqlite3")).unwrap();
+    let store = StateStore::open(
+        dir.path().join("state.sqlite3"),
+        dir.path().join("state_cache.sqlite3"),
+    )
+    .unwrap();
     let identity = DeviceIdentity {
         device_id: "test-device".into(),
         device_name: "fixture".into(),
@@ -416,7 +420,11 @@ async fn phase_175c_auth_failure_becomes_blocked_without_retry() {
     let a = TestServer::start().await;
     a.auth_failure.store(true, Ordering::SeqCst);
     let dir = tempdir().unwrap();
-    let store = StateStore::open(dir.path().join("state.sqlite3")).unwrap();
+    let store = StateStore::open(
+        dir.path().join("state.sqlite3"),
+        dir.path().join("state_cache.sqlite3"),
+    )
+    .unwrap();
     let identity = DeviceIdentity {
         device_id: "blocked-device".into(),
         device_name: "fixture".into(),
@@ -462,7 +470,11 @@ async fn phase_175c_profile_removal_cancels_target_delivery() {
     let a = TestServer::start().await;
     let b = TestServer::start().await;
     let dir = tempdir().unwrap();
-    let store = StateStore::open(dir.path().join("state.sqlite3")).unwrap();
+    let store = StateStore::open(
+        dir.path().join("state.sqlite3"),
+        dir.path().join("state_cache.sqlite3"),
+    )
+    .unwrap();
     let identity = DeviceIdentity {
         device_id: "delete-device".into(),
         device_name: "fixture".into(),
@@ -494,7 +506,11 @@ async fn phase_175c_single_to_multi_and_rate_limit_keep_other_target_independent
     let a = TestServer::start().await;
     let b = TestServer::start().await;
     let dir = tempdir().unwrap();
-    let store = StateStore::open(dir.path().join("state.sqlite3")).unwrap();
+    let store = StateStore::open(
+        dir.path().join("state.sqlite3"),
+        dir.path().join("state_cache.sqlite3"),
+    )
+    .unwrap();
     let identity = DeviceIdentity {
         device_id: "transition-device".into(),
         device_name: "fixture".into(),
@@ -546,7 +562,11 @@ async fn phase_175c_missing_pong_enters_reconnecting() {
     let a = TestServer::start().await;
     let b = TestServer::start().await;
     let dir = tempdir().unwrap();
-    let store = StateStore::open(dir.path().join("state.sqlite3")).unwrap();
+    let store = StateStore::open(
+        dir.path().join("state.sqlite3"),
+        dir.path().join("state_cache.sqlite3"),
+    )
+    .unwrap();
     let identity = DeviceIdentity {
         device_id: "heartbeat-device".into(),
         device_name: "fixture".into(),
@@ -570,7 +590,11 @@ async fn phase_175c_multi_to_single_b_stops_a_and_keeps_b() {
     let a = TestServer::start().await;
     let b = TestServer::start().await;
     let dir = tempdir().unwrap();
-    let store = StateStore::open(dir.path().join("state.sqlite3")).unwrap();
+    let store = StateStore::open(
+        dir.path().join("state.sqlite3"),
+        dir.path().join("state_cache.sqlite3"),
+    )
+    .unwrap();
     let identity = DeviceIdentity {
         device_id: "mode-device".into(),
         device_name: "fixture".into(),
@@ -600,7 +624,11 @@ async fn phase_175c_ack_isolation_leaves_b_pending_until_b_ack() {
     let b = TestServer::start().await;
     a.ack.store(false, Ordering::SeqCst);
     let dir = tempdir().unwrap();
-    let store = StateStore::open(dir.path().join("state.sqlite3")).unwrap();
+    let store = StateStore::open(
+        dir.path().join("state.sqlite3"),
+        dir.path().join("state_cache.sqlite3"),
+    )
+    .unwrap();
     let identity = DeviceIdentity {
         device_id: "ack-device".into(),
         device_name: "fixture".into(),
@@ -639,7 +667,11 @@ async fn phase_175c_profile_url_and_token_changes_replace_worker() {
     let new_server = TestServer::start().await;
     let other = TestServer::start().await;
     let dir = tempdir().unwrap();
-    let store = StateStore::open(dir.path().join("state.sqlite3")).unwrap();
+    let store = StateStore::open(
+        dir.path().join("state.sqlite3"),
+        dir.path().join("state_cache.sqlite3"),
+    )
+    .unwrap();
     let identity = DeviceIdentity {
         device_id: "profile-device".into(),
         device_name: "fixture".into(),

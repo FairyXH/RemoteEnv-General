@@ -48,9 +48,6 @@ pub struct ClientConfig {
     #[serde(default)]
     pub active_server_id: Option<String>,
     pub identity: DeviceIdentity,
-    pub wifi_enabled: bool,
-    #[serde(default)]
-    pub bluetooth_enabled: bool,
     pub scan_interval_seconds: u64,
     #[serde(default = "default_upload_interval_seconds")]
     pub upload_interval_seconds: u64,
@@ -80,8 +77,6 @@ impl Default for ClientConfig {
                 client_version: env!("CARGO_PKG_VERSION").into(),
                 hardware: None,
             },
-            wifi_enabled: false,
-            bluetooth_enabled: false,
             scan_interval_seconds: 30,
             upload_interval_seconds: 30,
             heartbeat_interval_seconds: 5,
