@@ -87,6 +87,14 @@ pub struct AuthFrame {
 }
 
 impl AuthFrame {
+    pub fn platform_capabilities(identity: &crate::config::DeviceIdentity) -> Vec<String> {
+        let mut capabilities = vec!["wifi".into(), "bluetooth".into()];
+        if identity.platform.eq_ignore_ascii_case("android") {
+            capabilities.extend(["cell".into(), "gps".into(), "gnss".into()]);
+        }
+        capabilities
+    }
+
     pub fn collector(
         token: impl Into<String>,
         identity: &crate::config::DeviceIdentity,

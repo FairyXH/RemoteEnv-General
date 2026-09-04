@@ -9,7 +9,9 @@ use serde::Serialize;
 use serde_json::Value;
 use std::time::Duration;
 use tokio::sync::{oneshot, watch};
-use tokio_tungstenite::{Connector, connect_async_tls_with_config, tungstenite::Message};
+#[cfg(not(target_os = "android"))]
+use tokio_tungstenite::Connector;
+use tokio_tungstenite::{connect_async_tls_with_config, tungstenite::Message};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ServerWorkerStatus {
@@ -182,32 +184,37 @@ impl ServerWorker {
         stop: &mut oneshot::Receiver<()>,
         backoff: &mut Backoff,
     ) -> Result<(), WorkerError> {
-        let connect = connect_async_tls_with_config(
-            &self.profile.url,
-            None,
-            false,
-            if self.profile.url.trim_start().starts_with("wss://") {
-                Some(Connector::NativeTls(
-                    native_tls::TlsConnector::builder()
-                        .danger_accept_invalid_certs(true)
-                        .danger_accept_invalid_hostnames(true)
-                        .build()
-                        .map_err(|error| WorkerError::Blocked(format!("TLS 配置失败: {error}")))?
-                        .into(),
-                ))
-            } else {
-                None
-            },
-        );
+        #[cfg(not(target_os = "android"))]
+        let connector = if self.profile.url.trim_start().starts_with("wss://") {
+            Some(Connector::NativeTls(
+                native_tls::TlsConnector::builder()
+                    .danger_accept_invalid_certs(true)
+                    .danger_accept_invalid_hostnames(true)
+                    .build()
+                    .map_err(|error| WorkerError::Blocked(format!("TLS 配置失败: {error}")))?
+                    .into(),
+            ))
+        } else {
+            None
+        };
+        #[cfg(target_os = "android")]
+        let connector = if self.profile.url.trim_start().starts_with("wss://") {
+            Some(crate::transport::insecure_tls_connector())
+        } else {
+            None
+        };
+        let connect = connect_async_tls_with_config(&self.profile.url, None, false, connector);
         let (mut socket, _) = tokio::select! {
             _ = &mut *stop => return Err(WorkerError::Stopped),
-            result = connect => result.map_err(|error| WorkerError::Connection(format!("连接 {url}: {error}", url = self.profile.url)))?,
+            result = tokio::time::timeout(Duration::from_secs(15), connect) => result
+                .map_err(|_| WorkerError::Connection("连接超时（15 秒）".into()))?
+                .map_err(|error| WorkerError::Connection(format!("连接 {url}: {error}", url = self.profile.url)))?,
         };
         self.publish(ConnectionState::Connected);
         let auth = AuthFrame::collector(
             &self.profile.token,
             &self.identity,
-            vec!["wifi".into(), "bluetooth".into()],
+            AuthFrame::platform_capabilities(&self.identity),
         );
         socket
             .send(Message::Text(
@@ -239,11 +246,16 @@ impl ServerWorker {
             )));
         }
         self.publish(ConnectionState::Ready);
+        self.status.last_error = None;
+        let _ = self.status_tx.send(self.status.clone());
         let mut heartbeat = tokio::time::interval(self.heartbeat_interval);
         heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut delivery_poll = tokio::time::interval(Duration::from_millis(50));
         delivery_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let mut in_flight = None;
+        let mut in_flight_since: Option<tokio::time::Instant> = None;
+        let mut upload_watchdog = tokio::time::interval(Duration::from_secs(1));
+        upload_watchdog.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             if in_flight.is_none() {
                 if let Some(item) = self.dispatcher.claim_next(&self.profile.id)? {
@@ -265,12 +277,18 @@ impl ServerWorker {
                         .await
                         .map_err(|_| WorkerError::Transport)?;
                     in_flight = Some(item);
+                    in_flight_since = Some(tokio::time::Instant::now());
                     self.refresh_counts();
                 }
             }
             tokio::select! {
                 _ = &mut *stop => return Err(WorkerError::Stopped),
                 _ = delivery_poll.tick(), if in_flight.is_none() => {}
+                _ = upload_watchdog.tick(), if in_flight.is_some() => {
+                    if in_flight_since.is_some_and(|started| started.elapsed() >= Duration::from_secs(30)) {
+                        return Err(WorkerError::Connection("等待上传 ACK 超时（30 秒），将重新连接并重试".into()));
+                    }
+                }
                 _ = heartbeat.tick() => {
                     if self.heartbeat_monitor.is_timed_out() {
                         return Err(WorkerError::Transport);
@@ -304,6 +322,7 @@ impl ServerWorker {
                         }
                         ServerEvent::Ack => {
                             let Some((id, envelope)) = in_flight.take() else { continue; };
+                            in_flight_since = None;
                             let ack: Ack = serde_json::from_value(value).map_err(|_| WorkerError::Protocol)?;
                             if !self.dispatcher.acknowledge(&self.profile.id, id, &ack, &envelope)? { return Err(WorkerError::Protocol); }
                             self.status.uploaded = self.status.uploaded.saturating_add(1);

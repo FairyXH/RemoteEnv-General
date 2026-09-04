@@ -43,6 +43,8 @@ use tokio::sync::{mpsc, watch};
 use tokio::time::timeout;
 
 pub type CollectorScan = std::sync::Arc<dyn Fn() -> Result<CollectorEvent, String> + Send + Sync>;
+pub type CollectorBatchScan =
+    std::sync::Arc<dyn Fn() -> Result<Vec<CollectorEvent>, String> + Send + Sync>;
 
 fn persist_latest_events(
     store: &StateStore,
@@ -191,6 +193,69 @@ struct BluetoothWorkerHandle {
     control: CollectorControl,
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
+}
+
+struct BatchCollectorHandle {
+    control: CollectorControl,
+    stop: Arc<AtomicBool>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl BatchCollectorHandle {
+    fn start(
+        scan: CollectorBatchScan,
+        interval: Duration,
+        events: mpsc::Sender<CollectorEvent>,
+    ) -> Self {
+        let (commands, mut command_rx) = mpsc::unbounded_channel();
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_flag = Arc::clone(&stop);
+        let thread = std::thread::Builder::new().name("remote-env-batch-worker".into()).spawn(move || {
+            let Ok(runtime) = tokio::runtime::Runtime::new() else { return; };
+            runtime.block_on(async move {
+                let mut ticker = tokio::time::interval(interval);
+                ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                ticker.reset_immediately();
+                let mut error_delay = Duration::from_secs(1);
+                loop {
+                    tokio::select! {
+                        _ = ticker.tick() => {
+                            if stop_flag.load(Ordering::Acquire) { break; }
+                            match timeout(Duration::from_secs(120), tokio::task::spawn_blocking({ let scan = Arc::clone(&scan); move || scan() })).await {
+                                Ok(Ok(Ok(batch))) => {
+                                    error_delay = Duration::from_secs(1);
+                                    for event in batch { if events.send(event).await.is_err() { break; } }
+                                }
+                                Ok(Ok(Err(_))) | Ok(Err(_)) | Err(_) => retry_after_error(&mut error_delay, &stop_flag).await,
+                            }
+                        }
+                        Some(CollectorCommand::Configure { enabled: _, interval }) = command_rx.recv() => {
+                            ticker = tokio::time::interval(interval);
+                            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                        }
+                        _ = tokio::time::sleep(Duration::from_millis(20)) => if stop_flag.load(Ordering::Acquire) { break; },
+                    }
+                }
+            });
+        }).expect("batch collector worker thread failed to start");
+        Self {
+            control: CollectorControl { commands },
+            stop,
+            thread: Some(thread),
+        }
+    }
+    fn configure(&self, interval: Duration) {
+        let _ = self.control.commands.send(CollectorCommand::Configure {
+            enabled: true,
+            interval,
+        });
+    }
+    fn stop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
 }
 
 impl BluetoothWorkerHandle {
@@ -363,6 +428,9 @@ pub struct RuntimeStatus {
     pub failed: u64,
     pub wifi_snapshot: Option<serde_json::Value>,
     pub bluetooth_snapshot: Option<serde_json::Value>,
+    pub cell_snapshot: Option<serde_json::Value>,
+    pub gps_snapshot: Option<serde_json::Value>,
+    pub gnss_snapshot: Option<serde_json::Value>,
     pub servers: Vec<ServerWorkerStatus>,
 }
 
@@ -384,6 +452,9 @@ impl Default for RuntimeStatus {
             failed: 0,
             wifi_snapshot: None,
             bluetooth_snapshot: None,
+            cell_snapshot: None,
+            gps_snapshot: None,
+            gnss_snapshot: None,
             servers: Vec::new(),
         }
     }
@@ -424,6 +495,16 @@ impl RuntimeSupervisor {
         scan: Option<CollectorScan>,
         bluetooth_scan: Option<CollectorScan>,
     ) -> Result<Self, RuntimeError> {
+        Self::start_with_collectors_and_batch(config, store, scan, bluetooth_scan, None)
+    }
+
+    pub fn start_with_collectors_and_batch(
+        config: ClientConfig,
+        store: StateStore,
+        scan: Option<CollectorScan>,
+        bluetooth_scan: Option<CollectorScan>,
+        batch_scan: Option<CollectorBatchScan>,
+    ) -> Result<Self, RuntimeError> {
         config.validate().map_err(RuntimeError::Configuration)?;
         let dispatcher = UploadDispatcher::new(store.clone());
         if dispatcher.resolve_targets(&config).is_empty() {
@@ -438,6 +519,8 @@ impl RuntimeSupervisor {
             mpsc::channel::<BluetoothRuntimeStatus>(16);
         let events_for_worker = events.clone();
         let events_for_bluetooth_worker = events.clone();
+        let events_for_batch_worker = events.clone();
+        let batch_scan_for_restart = batch_scan.clone();
         let thread = std::thread::Builder::new()
             .name("remote-env-runtime".into())
             .spawn(move || {
@@ -462,18 +545,72 @@ impl RuntimeSupervisor {
                     let mut latest_events: HashMap<String, CollectorEvent> = HashMap::new();
                     let mut wifi_snapshot: Option<serde_json::Value> = None;
                     let mut bluetooth_snapshot: Option<serde_json::Value> = None;
+                    let mut cell_snapshot: Option<serde_json::Value> = None;
+                    let mut gps_snapshot: Option<serde_json::Value> = None;
+                    let mut gnss_snapshot: Option<serde_json::Value> = None;
                     let worker = scan.map(|scan| PeriodicCollectorHandle::start(scan, true, Duration::from_secs(current_config.scan_interval_seconds), events_for_worker.clone(), wifi_status_tx));
                     let bluetooth_worker = bluetooth_scan.map(|scan| BluetoothWorkerHandle::start(scan, true, Duration::from_secs(current_config.scan_interval_seconds), events_for_bluetooth_worker.clone(), bluetooth_status_tx));
+                    let has_batch_collector = batch_scan_for_restart.is_some();
+                    let mut batch_worker = batch_scan.map(|scan| BatchCollectorHandle::start(scan, Duration::from_secs(current_config.scan_interval_seconds), events_for_batch_worker.clone()));
+                    let mut last_batch_event = has_batch_collector.then(tokio::time::Instant::now);
+                    let mut watchdog_tick = tokio::time::interval(Duration::from_secs(30));
+                    watchdog_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                     let mut wifi_runtime = WiFiRuntimeStatus::default();
                     let mut bluetooth_runtime = BluetoothRuntimeStatus::default();
+                    if has_batch_collector {
+                        wifi_runtime.enabled = true;
+                        wifi_runtime.state = WiFiRuntimeState::Starting;
+                        bluetooth_runtime.enabled = true;
+                        bluetooth_runtime.state = WiFiRuntimeState::Starting;
+                    }
                     loop {
                         tokio::select! {
                             _ = &mut stop_rx => break,
                             Some(event) = event_rx.recv() => {
                                 if event.data_type == "wifi" {
                                     wifi_snapshot = Some(event.data.clone());
+                                    if has_batch_collector {
+                                        let count = event.data.get("networks").and_then(|v| v.as_array()).map_or(0, Vec::len);
+                                        let started = event.data.get("scan_started_at").and_then(|v| v.as_i64()).unwrap_or(event.timestamp_ms);
+                                        let finished = event.data.get("scan_finished_at").and_then(|v| v.as_i64()).unwrap_or(event.timestamp_ms);
+                                        wifi_runtime.enabled = true;
+                                        wifi_runtime.state = WiFiRuntimeState::Ready;
+                                        wifi_runtime.last_scan_ms = Some(finished);
+                                        wifi_runtime.last_successful_scan_ms = Some(finished);
+                                        wifi_runtime.network_count = Some(count);
+                                        wifi_runtime.last_error = None;
+                                        wifi_runtime.total_scans = wifi_runtime.total_scans.saturating_add(1);
+                                        wifi_runtime.successful_scans = wifi_runtime.successful_scans.saturating_add(1);
+                                        wifi_runtime.duration_ms = Some(finished.saturating_sub(started) as u64);
+                                        last_batch_event = Some(tokio::time::Instant::now());
+                                    }
                                 } else if event.data_type == "bluetooth" {
                                     bluetooth_snapshot = Some(event.data.clone());
+                                    if has_batch_collector {
+                                        let devices = event.data.get("devices").and_then(|v| v.as_array());
+                                        let count = devices.map_or(0, Vec::len);
+                                        let ble_count = devices.map_or(0, |items| items.iter().filter(|item| item.get("technology").and_then(|v| v.as_str()).is_some_and(|v| v.eq_ignore_ascii_case("ble"))).count());
+                                        let started = event.data.get("scan_started_at").and_then(|v| v.as_i64()).unwrap_or(event.timestamp_ms);
+                                        let finished = event.data.get("scan_finished_at").and_then(|v| v.as_i64()).unwrap_or(event.timestamp_ms);
+                                        bluetooth_runtime.enabled = true;
+                                        bluetooth_runtime.state = WiFiRuntimeState::Ready;
+                                        bluetooth_runtime.last_scan_ms = Some(finished);
+                                        bluetooth_runtime.last_successful_scan_ms = Some(finished);
+                                        bluetooth_runtime.device_count = Some(count);
+                                        bluetooth_runtime.ble_device_count = ble_count;
+                                        bluetooth_runtime.classic_device_count = count.saturating_sub(ble_count);
+                                        bluetooth_runtime.last_error = None;
+                                        bluetooth_runtime.total_scans = bluetooth_runtime.total_scans.saturating_add(1);
+                                        bluetooth_runtime.successful_scans = bluetooth_runtime.successful_scans.saturating_add(1);
+                                        bluetooth_runtime.duration_ms = Some(finished.saturating_sub(started) as u64);
+                                        last_batch_event = Some(tokio::time::Instant::now());
+                                    }
+                                } else if event.data_type == "cell" {
+                                    cell_snapshot = Some(event.data.clone());
+                                } else if event.data_type == "gps" {
+                                    gps_snapshot = Some(event.data.clone());
+                                } else if event.data_type == "gnss" {
+                                    gnss_snapshot = Some(event.data.clone());
                                 }
                                 latest_events.insert(event.data_type.clone(), event);
                                 if collection_running {
@@ -495,6 +632,17 @@ impl RuntimeSupervisor {
                                     eprintln!("runtime state cache cleanup failed: {error}");
                                 }
                             }
+                            _ = watchdog_tick.tick(), if collection_running && has_batch_collector => {
+                                let stale_after = Duration::from_secs(current_config.scan_interval_seconds.saturating_mul(3).saturating_add(130).max(180));
+                                if last_batch_event.is_some_and(|last| last.elapsed() >= stale_after) {
+                                    eprintln!("batch collector watchdog restarting a stale worker");
+                                    if let Some(worker) = batch_worker.as_mut() { worker.stop(); }
+                                    batch_worker = batch_scan_for_restart.as_ref().map(|scan| BatchCollectorHandle::start(scan.clone(), Duration::from_secs(current_config.scan_interval_seconds), events_for_batch_worker.clone()));
+                                    last_batch_event = Some(tokio::time::Instant::now());
+                                    wifi_runtime.state = WiFiRuntimeState::Starting;
+                                    bluetooth_runtime.state = WiFiRuntimeState::Starting;
+                                }
+                            }
                             Some(command) = command_rx.recv() => {
                                 let (updated_config, next_running) = match command {
                                     RuntimeCommand::Config(updated_config) => (updated_config, collection_running),
@@ -507,6 +655,7 @@ impl RuntimeSupervisor {
                                 }
                                 if let Some(worker) = worker.as_ref() { worker.configure(true, Duration::from_secs(updated_config.scan_interval_seconds)); }
                                 if let Some(worker) = bluetooth_worker.as_ref() { worker.configure(true, Duration::from_secs(updated_config.scan_interval_seconds)); }
+                                if let Some(worker) = batch_worker.as_ref() { worker.configure(Duration::from_secs(updated_config.scan_interval_seconds)); }
                                 upload_tick = tokio::time::interval(Duration::from_millis(updated_config.upload_interval_seconds.saturating_mul(1000).max(100)));
                                 upload_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                                 current_config = updated_config;
@@ -543,6 +692,9 @@ impl RuntimeSupervisor {
                                 snapshot.failed = snapshot.servers.iter().map(|s| s.failed).sum();
                                 snapshot.wifi_snapshot = wifi_snapshot.clone();
                                 snapshot.bluetooth_snapshot = bluetooth_snapshot.clone();
+                                snapshot.cell_snapshot = cell_snapshot.clone();
+                                snapshot.gps_snapshot = gps_snapshot.clone();
+                                snapshot.gnss_snapshot = gnss_snapshot.clone();
                                 snapshot.wifi_runtime = wifi_runtime.clone(); snapshot.wifi = match wifi_runtime.state { WiFiRuntimeState::Disabled => CollectorStatus::Disabled, WiFiRuntimeState::Starting => CollectorStatus::Starting, WiFiRuntimeState::Scanning => CollectorStatus::Scanning, WiFiRuntimeState::Ready => CollectorStatus::Ready, WiFiRuntimeState::Error => CollectorStatus::Error, WiFiRuntimeState::Stopped => CollectorStatus::Stopped };
                                 snapshot.bluetooth_runtime = bluetooth_runtime.clone(); snapshot.bluetooth = match bluetooth_runtime.state { WiFiRuntimeState::Disabled => CollectorStatus::Disabled, WiFiRuntimeState::Starting => CollectorStatus::Starting, WiFiRuntimeState::Scanning => CollectorStatus::Scanning, WiFiRuntimeState::Ready => CollectorStatus::Ready, WiFiRuntimeState::Error => CollectorStatus::Error, WiFiRuntimeState::Stopped => CollectorStatus::Stopped };
                                 let _ = status_tx.send(snapshot);
@@ -552,6 +704,7 @@ impl RuntimeSupervisor {
                     supervisor.stop().await;
                     if let Some(mut worker) = worker { worker.stop(); }
                     if let Some(mut worker) = bluetooth_worker { worker.stop(); }
+                    if let Some(mut worker) = batch_worker { worker.stop(); }
                     let mut snapshot = RuntimeStatus::default();
                     snapshot.connection = ConnectionState::Stopped;
                     snapshot.wifi_runtime = wifi_runtime; snapshot.wifi = CollectorStatus::Stopped;
@@ -671,6 +824,9 @@ impl Runtime {
             failed: self.failed,
             wifi_snapshot: None,
             bluetooth_snapshot: None,
+            cell_snapshot: None,
+            gps_snapshot: None,
+            gnss_snapshot: None,
             servers: Vec::new(),
         })
     }

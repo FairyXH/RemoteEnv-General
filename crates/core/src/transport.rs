@@ -9,6 +9,63 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 
+#[cfg(target_os = "android")]
+pub fn insecure_tls_connector() -> tokio_tungstenite::Connector {
+    use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
+    use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
+    use rustls::{DigitallySignedStruct, SignatureScheme};
+    use std::sync::Arc;
+
+    #[derive(Debug)]
+    struct NoVerifier;
+    impl ServerCertVerifier for NoVerifier {
+        fn verify_server_cert(
+            &self,
+            _: &CertificateDer<'_>,
+            _: &[CertificateDer<'_>],
+            _: &ServerName<'_>,
+            _: &[u8],
+            _: UnixTime,
+        ) -> Result<ServerCertVerified, rustls::Error> {
+            Ok(ServerCertVerified::assertion())
+        }
+        fn verify_tls12_signature(
+            &self,
+            _: &[u8],
+            _: &CertificateDer<'_>,
+            _: &DigitallySignedStruct,
+        ) -> Result<HandshakeSignatureValid, rustls::Error> {
+            Ok(HandshakeSignatureValid::assertion())
+        }
+        fn verify_tls13_signature(
+            &self,
+            _: &[u8],
+            _: &CertificateDer<'_>,
+            _: &DigitallySignedStruct,
+        ) -> Result<HandshakeSignatureValid, rustls::Error> {
+            Ok(HandshakeSignatureValid::assertion())
+        }
+        fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+            vec![
+                SignatureScheme::RSA_PKCS1_SHA256,
+                SignatureScheme::RSA_PKCS1_SHA384,
+                SignatureScheme::RSA_PKCS1_SHA512,
+                SignatureScheme::ECDSA_NISTP256_SHA256,
+                SignatureScheme::ECDSA_NISTP384_SHA384,
+                SignatureScheme::RSA_PSS_SHA256,
+                SignatureScheme::RSA_PSS_SHA384,
+                SignatureScheme::RSA_PSS_SHA512,
+                SignatureScheme::ED25519,
+            ]
+        }
+    }
+    let config = rustls::ClientConfig::builder()
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(NoVerifier))
+        .with_no_client_auth();
+    tokio_tungstenite::Connector::Rustls(Arc::new(config))
+}
+
 #[derive(Debug, Error)]
 pub enum WebSocketError {
     #[error("transport error: {0}")]
@@ -64,7 +121,8 @@ impl WebSocketManager {
         self.state = ConnectionState::Connecting;
         let (mut socket, _) = connect_async(server_url).await?;
         self.state = ConnectionState::Connected;
-        let auth = AuthFrame::collector(token, identity, vec!["wifi".into(), "bluetooth".into()]);
+        let auth =
+            AuthFrame::collector(token, identity, AuthFrame::platform_capabilities(identity));
         socket
             .send(Message::Text(serde_json::to_string(&auth)?.into()))
             .await?;
@@ -291,7 +349,18 @@ impl Backoff {
         self.current = self.base
     }
     pub fn delay(&mut self) -> Duration {
-        Duration::from_secs(self.next_delay_seconds())
+        let seconds = self.next_delay_seconds();
+        let jitter_window_ms = seconds.saturating_mul(200);
+        let jitter_ms = if jitter_window_ms == 0 {
+            0
+        } else {
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .subsec_nanos() as u64
+                % (jitter_window_ms + 1)
+        };
+        Duration::from_millis(seconds.saturating_mul(900).saturating_add(jitter_ms))
     }
 }
 

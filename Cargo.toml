@@ -15,3 +15,12 @@ edition = "2024"
 rust-version = "1.85"
 license = "MIT"
 repository = "https://example.invalid/RemoteEnvCollector"
+
+# Keep release artifacts small: strip debug/symbol info, enable ThinLTO and
+# full codegen. This matters most for Android APKs, where unstripped debug
+# builds previously ballooned libremote_env_desktop_lib.so to ~158 MB.
+[profile.release]
+strip = "symbols"
+lto = "thin"
+codegen-units = 1
+panic = "abort"
