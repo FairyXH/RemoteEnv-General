@@ -2,11 +2,15 @@ use futures_util::{SinkExt, StreamExt};
 use remote_env_core::collector::CollectorEvent;
 use remote_env_core::config::{ClientConfig, ServerMode, ServerProfile};
 use remote_env_core::protocol::AuthFrame;
-use remote_env_core::runtime::{CollectorScan, RuntimeStatus, RuntimeSupervisor};
+#[cfg(windows)]
+use remote_env_core::runtime::CollectorScan;
+use remote_env_core::runtime::{RuntimeStatus, RuntimeSupervisor};
 use remote_env_core::state::StateStore;
+#[cfg(windows)]
 use remote_env_platform_windows::bluetooth::{
     BluetoothCollector, NativeBleScanner, NativeClassicBluetoothScanner,
 };
+#[cfg(windows)]
 use remote_env_platform_windows::wifi::{NativeWlanProvider, WlanProvider};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -20,12 +24,17 @@ use std::{
     sync::OnceLock,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
+use tauri::{Emitter, Manager, State};
+#[cfg(desktop)]
 use tauri::{
-    Emitter, Manager, State,
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
 };
-use tokio_tungstenite::{connect_async, tungstenite::Message};
+#[cfg(not(target_os = "android"))]
+use tokio_tungstenite::connect_async;
+#[cfg(target_os = "android")]
+use tokio_tungstenite::connect_async_tls_with_config;
+use tokio_tungstenite::tungstenite::Message;
 
 const STATUS_EVENT: &str = "runtime_status_changed";
 static LOG_PATH: OnceLock<PathBuf> = OnceLock::new();
@@ -37,12 +46,67 @@ fn now_ms() -> i64 {
         .as_millis() as i64
 }
 
+#[cfg(windows)]
 fn make_bluetooth_scan() -> CollectorScan {
     let collector = std::sync::Arc::new(BluetoothCollector::new(
         NativeBleScanner::new(),
         NativeClassicBluetoothScanner::new(),
     ));
     std::sync::Arc::new(move || collector.scan_once().map_err(|error| error.to_string()))
+}
+
+fn make_runtime(
+    config: ClientConfig,
+    store: StateStore,
+    app: &tauri::AppHandle,
+) -> Result<RuntimeSupervisor, String> {
+    #[cfg(windows)]
+    {
+        let _ = app;
+        return RuntimeSupervisor::start_with_collectors(
+            config,
+            store,
+            Some(std::sync::Arc::new(|| {
+                NativeWlanProvider::new()
+                    .scan()
+                    .and_then(|snapshot| {
+                        Ok(CollectorEvent {
+                            data_type: "wifi".into(),
+                            timestamp_ms: now_ms(),
+                            data: serde_json::to_value(snapshot).map_err(|error| {
+                                remote_env_platform_windows::wifi::WiFiError::InvalidData(
+                                    error.to_string(),
+                                )
+                            })?,
+                        })
+                    })
+                    .map_err(|error| error.to_string())
+            })),
+            Some(make_bluetooth_scan()),
+        )
+        .map_err(user_error);
+    }
+    #[cfg(target_os = "android")]
+    {
+        let collector = app
+            .state::<remote_env_platform_android::AndroidCollector<tauri::Wry>>()
+            .inner()
+            .clone();
+        let batch = std::sync::Arc::new(move || collector.collect_all());
+        return RuntimeSupervisor::start_with_collectors_and_batch(
+            config,
+            store,
+            None,
+            None,
+            Some(batch),
+        )
+        .map_err(user_error);
+    }
+    #[cfg(not(any(windows, target_os = "android")))]
+    {
+        let _ = app;
+        RuntimeSupervisor::start(config, store).map_err(user_error)
+    }
 }
 
 pub struct AppState {
@@ -135,6 +199,254 @@ struct ConnectionTestResult {
     message: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct PersistenceSettingsView {
+    is_android: bool,
+    foreground_enabled: bool,
+    auto_start_enabled: bool,
+    hide_from_recents: bool,
+    accessibility_enabled: bool,
+    battery_optimization_ignored: bool,
+    root_enabled: bool,
+    root_available: bool,
+    device_admin_active: bool,
+    device_owner_active: bool,
+    profile_owner_active: bool,
+    dhizuku_compat_enabled: bool,
+    dhizuku_supported: bool,
+    android_api_level: u32,
+    background_location_granted: bool,
+    location_enabled: bool,
+    device_owner_command: String,
+}
+
+#[tauri::command]
+fn get_persistence_settings(app: tauri::AppHandle) -> Result<PersistenceSettingsView, String> {
+    #[cfg(target_os = "android")]
+    {
+        let settings = app
+            .state::<remote_env_platform_android::AndroidCollector<tauri::Wry>>()
+            .persistence_settings()?;
+        return Ok(PersistenceSettingsView {
+            is_android: true,
+            foreground_enabled: settings.foreground_enabled,
+            auto_start_enabled: settings.auto_start_enabled,
+            hide_from_recents: settings.hide_from_recents,
+            accessibility_enabled: settings.accessibility_enabled,
+            battery_optimization_ignored: settings.battery_optimization_ignored,
+            root_enabled: settings.root_enabled,
+            root_available: settings.root_available,
+            device_admin_active: settings.device_admin_active,
+            device_owner_active: settings.device_owner_active,
+            profile_owner_active: settings.profile_owner_active,
+            dhizuku_compat_enabled: settings.dhizuku_compat_enabled,
+            dhizuku_supported: settings.dhizuku_supported,
+            android_api_level: settings.android_api_level,
+            background_location_granted: settings.background_location_granted,
+            location_enabled: settings.location_enabled,
+            device_owner_command: settings.device_owner_command,
+        });
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = app;
+        Ok(PersistenceSettingsView {
+            is_android: false,
+            foreground_enabled: false,
+            auto_start_enabled: false,
+            hide_from_recents: false,
+            accessibility_enabled: false,
+            battery_optimization_ignored: false,
+            root_enabled: false,
+            root_available: false,
+            device_admin_active: false,
+            device_owner_active: false,
+            profile_owner_active: false,
+            dhizuku_compat_enabled: false,
+            dhizuku_supported: false,
+            android_api_level: 0,
+            background_location_granted: false,
+            location_enabled: false,
+            device_owner_command: String::new(),
+        })
+    }
+}
+
+#[tauri::command]
+fn set_foreground_service_enabled(
+    enabled: bool,
+    app: tauri::AppHandle,
+) -> Result<PersistenceSettingsView, String> {
+    #[cfg(target_os = "android")]
+    app.state::<remote_env_platform_android::AndroidCollector<tauri::Wry>>()
+        .set_foreground_enabled(enabled)?;
+    #[cfg(not(target_os = "android"))]
+    let _ = enabled;
+    get_persistence_settings(app)
+}
+
+#[tauri::command]
+fn set_auto_start_enabled(
+    enabled: bool,
+    app: tauri::AppHandle,
+) -> Result<PersistenceSettingsView, String> {
+    #[cfg(target_os = "android")]
+    app.state::<remote_env_platform_android::AndroidCollector<tauri::Wry>>()
+        .set_auto_start_enabled(enabled)?;
+    #[cfg(not(target_os = "android"))]
+    let _ = enabled;
+    get_persistence_settings(app)
+}
+
+#[tauri::command]
+fn request_auto_start_permission(app: tauri::AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    return app
+        .state::<remote_env_platform_android::AndroidCollector<tauri::Wry>>()
+        .request_auto_start_permission();
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = app;
+        Ok(())
+    }
+}
+
+#[tauri::command]
+fn set_hide_from_recents(
+    enabled: bool,
+    app: tauri::AppHandle,
+) -> Result<PersistenceSettingsView, String> {
+    #[cfg(target_os = "android")]
+    app.state::<remote_env_platform_android::AndroidCollector<tauri::Wry>>()
+        .set_hide_from_recents(enabled)?;
+    #[cfg(not(target_os = "android"))]
+    let _ = enabled;
+    get_persistence_settings(app)
+}
+
+#[tauri::command]
+fn request_accessibility_permission(app: tauri::AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    return app
+        .state::<remote_env_platform_android::AndroidCollector<tauri::Wry>>()
+        .request_accessibility_permission();
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = app;
+        Ok(())
+    }
+}
+
+#[tauri::command]
+fn request_home_settings(app: tauri::AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    return app
+        .state::<remote_env_platform_android::AndroidCollector<tauri::Wry>>()
+        .request_home_settings();
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = app;
+        Ok(())
+    }
+}
+
+#[tauri::command]
+fn request_battery_optimization_exemption(app: tauri::AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    return app
+        .state::<remote_env_platform_android::AndroidCollector<tauri::Wry>>()
+        .request_battery_optimization_exemption();
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = app;
+        Ok(())
+    }
+}
+
+#[tauri::command]
+fn set_root_support_enabled(
+    enabled: bool,
+    app: tauri::AppHandle,
+) -> Result<PersistenceSettingsView, String> {
+    #[cfg(target_os = "android")]
+    app.state::<remote_env_platform_android::AndroidCollector<tauri::Wry>>()
+        .set_root_enabled(enabled)?;
+    #[cfg(not(target_os = "android"))]
+    let _ = enabled;
+    get_persistence_settings(app)
+}
+
+#[tauri::command]
+fn request_device_admin(app: tauri::AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    return app
+        .state::<remote_env_platform_android::AndroidCollector<tauri::Wry>>()
+        .request_device_admin();
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = app;
+        Ok(())
+    }
+}
+
+#[tauri::command]
+fn request_background_location(app: tauri::AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    return app
+        .state::<remote_env_platform_android::AndroidCollector<tauri::Wry>>()
+        .request_background_location();
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = app;
+        Ok(())
+    }
+}
+
+#[tauri::command]
+fn set_dhizuku_compat_enabled(
+    enabled: bool,
+    app: tauri::AppHandle,
+) -> Result<PersistenceSettingsView, String> {
+    #[cfg(target_os = "android")]
+    app.state::<remote_env_platform_android::AndroidCollector<tauri::Wry>>()
+        .set_dhizuku_compat_enabled(enabled)?;
+    #[cfg(not(target_os = "android"))]
+    let _ = enabled;
+    get_persistence_settings(app)
+}
+
+#[tauri::command]
+fn list_dhizuku_apps(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    #[cfg(target_os = "android")]
+    return serde_json::to_value(
+        app.state::<remote_env_platform_android::AndroidCollector<tauri::Wry>>()
+            .list_dhizuku_apps()?,
+    )
+    .map_err(|error| error.to_string());
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = app;
+        Ok(serde_json::json!([]))
+    }
+}
+
+#[tauri::command]
+fn set_dhizuku_app_authorization(
+    package_name: String,
+    allowed: bool,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    return app
+        .state::<remote_env_platform_android::AndroidCollector<tauri::Wry>>()
+        .set_dhizuku_app_authorization(&package_name, allowed);
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (package_name, allowed, app);
+        Err("仅 Android 支持此功能。".into())
+    }
+}
+
 fn user_error(error: impl std::fmt::Display) -> String {
     let message = error.to_string();
     if message.contains("token") || message.contains("auth") {
@@ -196,6 +508,195 @@ fn warn(message: impl AsRef<str>) {
 }
 fn error(message: impl AsRef<str>) {
     write_log("ERROR", message.as_ref());
+}
+
+#[cfg(target_os = "android")]
+mod android_headless {
+    use super::*;
+    use jni::{
+        JNIEnv,
+        objects::{JClass, JString},
+        sys::{jlong, jstring},
+    };
+    use std::{path::Path, ptr, sync::OnceLock};
+
+    #[derive(Default)]
+    struct HeadlessState {
+        runtime: Option<RuntimeSupervisor>,
+        data_dir: Option<PathBuf>,
+        scan_interval_seconds: u64,
+    }
+
+    static STATE: OnceLock<Mutex<HeadlessState>> = OnceLock::new();
+
+    fn state() -> &'static Mutex<HeadlessState> {
+        STATE.get_or_init(|| Mutex::new(HeadlessState::default()))
+    }
+
+    fn paths(data_dir: &Path) -> (PathBuf, PathBuf, PathBuf) {
+        (
+            data_dir.join("state.sqlite3"),
+            data_dir.join("state_cache.sqlite3"),
+            data_dir.join("logs").join("collector.log"),
+        )
+    }
+
+    pub(super) fn start(data_dir: PathBuf) -> Result<RuntimeStatus, String> {
+        fs::create_dir_all(&data_dir).map_err(user_error)?;
+        let (config_path, cache_path, log_path) = paths(&data_dir);
+        if let Some(parent) = log_path.parent() {
+            fs::create_dir_all(parent).map_err(user_error)?;
+        }
+        init_logging(log_path);
+        let (store, config) = load_config(&config_path, &cache_path)?;
+        if config.selected_servers().is_empty() {
+            return Err("请先新增并启用至少一个服务器配置。".into());
+        }
+        let mut headless = state()
+            .lock()
+            .map_err(|_| "后台服务状态不可用。".to_string())?;
+        headless.scan_interval_seconds = config.scan_interval_seconds.max(1);
+        headless.data_dir = Some(data_dir);
+        if let Some(runtime) = headless.runtime.as_ref() {
+            runtime
+                .set_collection_running(config, true)
+                .map_err(user_error)?;
+            return Ok(runtime.status());
+        }
+        let runtime = RuntimeSupervisor::start(config.clone(), store).map_err(user_error)?;
+        runtime
+            .set_collection_running(config, true)
+            .map_err(user_error)?;
+        let status = runtime.status();
+        headless.runtime = Some(runtime);
+        info("Android headless 服务运行时已启动");
+        Ok(status)
+    }
+
+    pub(super) fn stop() -> Result<(), String> {
+        let mut headless = state()
+            .lock()
+            .map_err(|_| "后台服务状态不可用。".to_string())?;
+        if let Some(mut runtime) = headless.runtime.take() {
+            runtime.stop();
+        }
+        info("Android headless 服务运行时已停止");
+        Ok(())
+    }
+
+    pub(super) fn submit(events_json: &str) -> Result<(), String> {
+        let events: Vec<CollectorEvent> = serde_json::from_str(events_json).map_err(user_error)?;
+        let headless = state()
+            .lock()
+            .map_err(|_| "后台服务状态不可用。".to_string())?;
+        let runtime = headless
+            .runtime
+            .as_ref()
+            .ok_or_else(|| "后台服务运行时尚未启动。".to_string())?;
+        for event in events {
+            runtime.submit(event).map_err(user_error)?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn status() -> RuntimeStatus {
+        state()
+            .lock()
+            .ok()
+            .and_then(|headless| headless.runtime.as_ref().map(RuntimeSupervisor::status))
+            .unwrap_or_default()
+    }
+
+    pub(super) fn status_if_changed() -> Option<RuntimeStatus> {
+        state().lock().ok().and_then(|mut headless| {
+            headless
+                .runtime
+                .as_mut()
+                .and_then(|runtime| runtime.status_has_changed().then(|| runtime.status()))
+        })
+    }
+
+    pub(super) fn reconfigure(config: &ClientConfig) -> Result<(), String> {
+        let mut headless = state()
+            .lock()
+            .map_err(|_| "后台服务状态不可用。".to_string())?;
+        headless.scan_interval_seconds = config.scan_interval_seconds.max(1);
+        if let Some(runtime) = headless.runtime.as_ref() {
+            runtime.update_config(config.clone()).map_err(user_error)?;
+        }
+        Ok(())
+    }
+
+    fn interval_millis() -> i64 {
+        state()
+            .lock()
+            .map(|headless| headless.scan_interval_seconds.max(1) as i64 * 1_000)
+            .unwrap_or(30_000)
+    }
+
+    fn java_string(env: &mut JNIEnv<'_>, value: impl AsRef<str>) -> jstring {
+        env.new_string(value.as_ref())
+            .map(|value| value.into_raw())
+            .unwrap_or(ptr::null_mut())
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_com_remoteenv_collector_nativecollector_HeadlessRuntime_nativeStart(
+        mut env: JNIEnv<'_>,
+        _class: JClass<'_>,
+        data_dir: JString<'_>,
+    ) -> jstring {
+        let result = env
+            .get_string(&data_dir)
+            .map(|value| PathBuf::from(value.to_string_lossy().into_owned()))
+            .map_err(|error| error.to_string())
+            .and_then(start)
+            .and_then(|status| serde_json::to_string(&status).map_err(user_error));
+        java_string(
+            &mut env,
+            result.unwrap_or_else(|error| {
+                format!(
+                    r#"{{"error":{}}}"#,
+                    serde_json::to_string(&error).unwrap_or_else(|_| "\"unknown\"".into())
+                )
+            }),
+        )
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_com_remoteenv_collector_nativecollector_HeadlessRuntime_nativeStop(
+        mut env: JNIEnv<'_>,
+        _class: JClass<'_>,
+    ) -> jstring {
+        let result = stop()
+            .map(|_| "ok".to_string())
+            .unwrap_or_else(|error| error);
+        java_string(&mut env, result)
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_com_remoteenv_collector_nativecollector_HeadlessRuntime_nativeSubmitEvents(
+        mut env: JNIEnv<'_>,
+        _class: JClass<'_>,
+        events: JString<'_>,
+    ) -> jstring {
+        let result = env
+            .get_string(&events)
+            .map(|value| value.to_string_lossy().into_owned())
+            .map_err(|error| error.to_string())
+            .and_then(|events| submit(&events))
+            .map(|_| "ok".to_string())
+            .unwrap_or_else(|error| error);
+        java_string(&mut env, result)
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "system" fn Java_com_remoteenv_collector_nativecollector_HeadlessRuntime_nativeIntervalMillis(
+        _env: JNIEnv<'_>,
+        _class: JClass<'_>,
+    ) -> jlong {
+        interval_millis() as jlong
+    }
 }
 
 #[tauri::command]
@@ -290,8 +791,15 @@ fn load_config(
         }
     }
     if config.identity.device_id.is_empty() {
+        let platform = if cfg!(target_os = "android") {
+            "android"
+        } else if cfg!(windows) {
+            "windows"
+        } else {
+            std::env::consts::OS
+        };
         config.identity = store
-            .load_or_create_identity("RemoteEnvCollector", "windows", "")
+            .load_or_create_identity("RemoteEnvCollector", platform, "")
             .map_err(user_error)?;
         save_config(&store, &config)?;
     } else if migrated || heartbeat_migrated {
@@ -423,29 +931,45 @@ fn config_view(config: &ClientConfig) -> DesktopConfigView {
 }
 
 fn update_runtime(state: &AppState, config: &ClientConfig) -> Result<(), String> {
-    let guard = state
-        .runtime
-        .lock()
-        .map_err(|_| "应用状态不可用。".to_string())?;
-    if let Some(runtime) = guard.as_ref() {
-        runtime.update_config(config.clone()).map_err(user_error)?;
+    #[cfg(target_os = "android")]
+    {
+        let _ = state;
+        return android_headless::reconfigure(config);
     }
-    Ok(())
+    #[cfg(not(target_os = "android"))]
+    {
+        let guard = state
+            .runtime
+            .lock()
+            .map_err(|_| "应用状态不可用。".to_string())?;
+        if let Some(runtime) = guard.as_ref() {
+            runtime.update_config(config.clone()).map_err(user_error)?;
+        }
+        Ok(())
+    }
 }
 
 fn current_status(state: &AppState) -> Result<RuntimeStatus, String> {
-    let guard = state
-        .runtime
-        .lock()
-        .map_err(|_| "应用状态不可用。".to_string())?;
-    Ok(guard
-        .as_ref()
-        .map(RuntimeSupervisor::status)
-        .unwrap_or_else(|| {
-            let mut status = RuntimeStatus::default();
-            status.connection = remote_env_core::transport::ConnectionState::Stopped;
-            status
-        }))
+    #[cfg(target_os = "android")]
+    {
+        let _ = state;
+        return Ok(android_headless::status());
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let guard = state
+            .runtime
+            .lock()
+            .map_err(|_| "应用状态不可用。".to_string())?;
+        Ok(guard
+            .as_ref()
+            .map(RuntimeSupervisor::status)
+            .unwrap_or_else(|| {
+                let mut status = RuntimeStatus::default();
+                status.connection = remote_env_core::transport::ConnectionState::Stopped;
+                status
+            }))
+    }
 }
 
 #[tauri::command]
@@ -682,30 +1206,7 @@ fn connect_server_profile(
     if let Some(runtime) = guard.as_ref() {
         runtime.update_config(config.clone()).map_err(user_error)?;
     } else {
-        *guard = Some(
-            RuntimeSupervisor::start_with_collectors(
-                config.clone(),
-                store,
-                Some(std::sync::Arc::new(|| {
-                    NativeWlanProvider::new()
-                        .scan()
-                        .and_then(|snapshot| {
-                            Ok(CollectorEvent {
-                                data_type: "wifi".into(),
-                                timestamp_ms: now_ms(),
-                                data: serde_json::to_value(snapshot).map_err(|error| {
-                                    remote_env_platform_windows::wifi::WiFiError::InvalidData(
-                                        error.to_string(),
-                                    )
-                                })?,
-                            })
-                        })
-                        .map_err(|error| error.to_string())
-                })),
-                Some(make_bluetooth_scan()),
-            )
-            .map_err(user_error)?,
-        );
+        *guard = Some(make_runtime(config.clone(), store, &app)?);
     }
     let initial_status = guard
         .as_ref()
@@ -743,6 +1244,7 @@ fn connect_server_profile(
 }
 
 #[tauri::command]
+#[cfg(windows)]
 async fn scan_wifi_now() -> Result<CollectorEvent, String> {
     tauri::async_runtime::spawn_blocking(|| {
         let result = NativeWlanProvider::new().scan();
@@ -769,6 +1271,13 @@ async fn scan_wifi_now() -> Result<CollectorEvent, String> {
 }
 
 #[tauri::command]
+#[cfg(not(windows))]
+async fn scan_wifi_now() -> Result<CollectorEvent, String> {
+    Err("移动端由批量原生采集器持续采集，请启动采集服务查看结果。".into())
+}
+
+#[tauri::command]
+#[cfg(windows)]
 async fn scan_bluetooth_now() -> Result<CollectorEvent, String> {
     tauri::async_runtime::spawn_blocking(|| {
         BluetoothCollector::new(
@@ -783,6 +1292,43 @@ async fn scan_bluetooth_now() -> Result<CollectorEvent, String> {
     })
     .await
     .map_err(|_| "蓝牙扫描任务异常终止。".to_string())?
+}
+
+#[tauri::command]
+#[cfg(not(windows))]
+async fn scan_bluetooth_now() -> Result<CollectorEvent, String> {
+    Err("移动端由批量原生采集器持续采集，请启动采集服务查看结果。".into())
+}
+
+#[tauri::command]
+async fn scan_android_environment_now(
+    data_type: String,
+    app: tauri::AppHandle,
+) -> Result<CollectorEvent, String> {
+    #[cfg(target_os = "android")]
+    {
+        if !matches!(
+            data_type.as_str(),
+            "wifi" | "bluetooth" | "cell" | "gps" | "gnss"
+        ) {
+            return Err("不支持的数据类型。".into());
+        }
+        let collector = app
+            .state::<remote_env_platform_android::AndroidCollector<tauri::Wry>>()
+            .inner()
+            .clone();
+        return tauri::async_runtime::spawn_blocking(move || collector.collect_all())
+            .await
+            .map_err(|_| "原生采集任务异常终止。".to_string())??
+            .into_iter()
+            .find(|event| event.data_type == data_type)
+            .ok_or_else(|| "原生采集器未返回该类型数据。".to_string());
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (data_type, app);
+        Err("该采集入口仅适用于 Android。".into())
+    }
 }
 
 #[tauri::command]
@@ -803,13 +1349,22 @@ async fn test_server_profile(
         ..config.identity
     };
     let test = async move {
-        let (mut socket, _) = connect_async(&profile.url)
-            .await
-            .map_err(|_| "无法建立 WebSocket 连接。".to_string())?;
+        #[cfg(target_os = "android")]
+        let connection = connect_async_tls_with_config(
+            &profile.url,
+            None,
+            false,
+            Some(remote_env_core::transport::insecure_tls_connector()),
+        )
+        .await;
+        #[cfg(not(target_os = "android"))]
+        let connection = connect_async(&profile.url).await;
+        let (mut socket, _) =
+            connection.map_err(|error| format!("无法建立 WebSocket 连接：{error}"))?;
         let auth = AuthFrame::collector(
             profile.token,
             &identity,
-            vec!["wifi".into(), "bluetooth".into()],
+            AuthFrame::platform_capabilities(&identity),
         );
         socket
             .send(Message::Text(
@@ -846,7 +1401,7 @@ async fn test_server_profile(
             message: "连接成功，认证成功，服务器可用。".into(),
         })
     };
-    tokio::time::timeout(Duration::from_secs(15), test)
+    tokio::time::timeout(Duration::from_secs(10), test)
         .await
         .map_err(|_| "连接测试超时，请检查网络和服务器地址。".to_string())?
 }
@@ -861,56 +1416,50 @@ fn start_runtime(
     if config.selected_servers().is_empty() {
         return Err("请先新增并启用至少一个服务器配置。".into());
     }
-    let mut guard = state
-        .runtime
-        .lock()
-        .map_err(|_| "应用状态不可用。".to_string())?;
-    if guard.is_none() {
-        *guard = Some(
-            RuntimeSupervisor::start_with_collectors(
-                config.clone(),
-                store,
-                Some(std::sync::Arc::new(|| {
-                    NativeWlanProvider::new()
-                        .scan()
-                        .and_then(|snapshot| {
-                            Ok(CollectorEvent {
-                                data_type: "wifi".into(),
-                                timestamp_ms: now_ms(),
-                                data: serde_json::to_value(snapshot).map_err(|error| {
-                                    remote_env_platform_windows::wifi::WiFiError::InvalidData(
-                                        error.to_string(),
-                                    )
-                                })?,
-                            })
-                        })
-                        .map_err(|error| error.to_string())
-                })),
-                Some(make_bluetooth_scan()),
-            )
-            .map_err(user_error)?,
-        );
+    #[cfg(target_os = "android")]
+    {
+        drop(store);
+        app.state::<remote_env_platform_android::AndroidCollector<tauri::Wry>>()
+            .set_foreground_enabled(true)?;
+        let data_dir = state
+            .state_path
+            .parent()
+            .ok_or_else(|| "Android 数据目录不可用。".to_string())?
+            .to_path_buf();
+        let status = android_headless::start(data_dir)?;
+        let _ = app.emit(STATUS_EVENT, &status);
+        return Ok(status);
     }
-    if let Some(runtime) = guard.as_ref() {
-        let command_result = runtime
-            .set_collection_running(config.clone(), true)
-            .map_err(user_error);
-        if command_result.is_ok() {
-            info("采集服务运行命令已发送，等待 Runtime 应用并启动扫描器");
+    #[cfg(not(target_os = "android"))]
+    {
+        let mut guard = state
+            .runtime
+            .lock()
+            .map_err(|_| "应用状态不可用。".to_string())?;
+        if guard.is_none() {
+            *guard = Some(make_runtime(config.clone(), store, &app)?);
         }
-        command_result?;
+        if let Some(runtime) = guard.as_ref() {
+            let command_result = runtime
+                .set_collection_running(config.clone(), true)
+                .map_err(user_error);
+            if command_result.is_ok() {
+                info("采集服务运行命令已发送，等待 Runtime 应用并启动扫描器");
+            }
+            command_result?;
+        }
+        let status = guard
+            .as_ref()
+            .map(RuntimeSupervisor::status)
+            .map(|mut status| {
+                status.collection_running = true;
+                status
+            })
+            .unwrap_or_default();
+        let _ = app.emit(STATUS_EVENT, &status);
+        info("采集服务启动命令已提交，扫描器已请求立即运行");
+        Ok(status)
     }
-    let status = guard
-        .as_ref()
-        .map(RuntimeSupervisor::status)
-        .map(|mut status| {
-            status.collection_running = true;
-            status
-        })
-        .unwrap_or_default();
-    let _ = app.emit(STATUS_EVENT, &status);
-    info("采集服务启动命令已提交，扫描器已请求立即运行");
-    Ok(status)
 }
 
 #[tauri::command]
@@ -919,20 +1468,30 @@ fn stop_runtime(
     state: State<'_, AppState>,
 ) -> Result<RuntimeStatus, String> {
     info("收到停止采集服务请求");
-    let runtime = {
-        let mut guard = state
-            .runtime
-            .lock()
-            .map_err(|_| "应用状态不可用。".to_string())?;
-        guard.take()
-    };
-    if let Some(mut runtime) = runtime {
-        runtime.stop();
-        info("采集服务及其服务器、采集器已停止");
+    #[cfg(target_os = "android")]
+    {
+        android_headless::stop()?;
+        let status = current_status(&state)?;
+        let _ = app.emit(STATUS_EVENT, &status);
+        return Ok(status);
     }
-    let status = current_status(&state)?;
-    let _ = app.emit(STATUS_EVENT, &status);
-    Ok(status)
+    #[cfg(not(target_os = "android"))]
+    {
+        let runtime = {
+            let mut guard = state
+                .runtime
+                .lock()
+                .map_err(|_| "应用状态不可用。".to_string())?;
+            guard.take()
+        };
+        if let Some(mut runtime) = runtime {
+            runtime.stop();
+            info("采集服务及其服务器、采集器已停止");
+        }
+        let status = current_status(&state)?;
+        let _ = app.emit(STATUS_EVENT, &status);
+        Ok(status)
+    }
 }
 
 fn spawn_status_bridge(app: tauri::AppHandle) {
@@ -947,13 +1506,20 @@ fn spawn_status_bridge(app: tauri::AppHandle) {
                 break;
             }
             let next = {
-                let state = app.state::<AppState>();
-                let Ok(mut guard) = state.runtime.lock() else {
-                    continue;
-                };
-                guard
-                    .as_mut()
-                    .and_then(|runtime| runtime.status_has_changed().then(|| runtime.status()))
+                #[cfg(target_os = "android")]
+                {
+                    android_headless::status_if_changed()
+                }
+                #[cfg(not(target_os = "android"))]
+                {
+                    let state = app.state::<AppState>();
+                    let Ok(mut guard) = state.runtime.lock() else {
+                        continue;
+                    };
+                    guard
+                        .as_mut()
+                        .and_then(|runtime| runtime.status_has_changed().then(|| runtime.status()))
+                }
             };
             if let Some(status) = next {
                 let connection = status.connection.to_string();
@@ -994,17 +1560,29 @@ fn spawn_status_bridge(app: tauri::AppHandle) {
 }
 
 fn stop_for_exit(app: &tauri::AppHandle) {
-    let state = app.state::<AppState>();
-    state.exiting.store(true, Ordering::Release);
-    if let Ok(mut guard) = state.runtime.lock() {
-        if let Some(mut runtime) = guard.take() {
-            runtime.stop();
+    #[cfg(target_os = "android")]
+    {
+        let _ = app;
+        return;
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let state = app.state::<AppState>();
+        state.exiting.store(true, Ordering::Release);
+        if let Ok(mut guard) = state.runtime.lock() {
+            if let Some(mut runtime) = guard.take() {
+                runtime.stop();
+            }
         }
     }
 }
 
-pub fn run(tray_start: bool) {
-    tauri::Builder::default()
+pub fn run_app(tray_start: bool) {
+    #[cfg(target_os = "android")]
+    let builder = tauri::Builder::default().plugin(remote_env_platform_android::init());
+    #[cfg(not(target_os = "android"))]
+    let builder = tauri::Builder::default();
+    builder
         .setup(move |app| {
             let path = state_path(&app.handle()).map_err(|error| std::io::Error::other(error))?;
             let cache =
@@ -1021,59 +1599,67 @@ pub fn run(tray_start: bool) {
             });
             init_logging(log);
             info("应用启动");
-            let open = MenuItem::with_id(app, "open", "打开主窗口", true, None::<&str>)?;
-            let start = MenuItem::with_id(app, "start", "启动采集服务", true, None::<&str>)?;
-            let stop = MenuItem::with_id(app, "stop", "停止采集服务", true, None::<&str>)?;
-            let exit = MenuItem::with_id(app, "exit", "退出", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&open, &start, &stop, &exit])?;
             let handle = app.handle().clone();
-            TrayIconBuilder::with_id("main")
-                .tooltip("远程环境采集器")
-                .menu(&menu)
-                .on_menu_event(move |app, event| match event.id.as_ref() {
-                    "open" => {
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
+            #[cfg(desktop)]
+            {
+                let open = MenuItem::with_id(app, "open", "打开主窗口", true, None::<&str>)?;
+                let start = MenuItem::with_id(app, "start", "启动采集服务", true, None::<&str>)?;
+                let stop = MenuItem::with_id(app, "stop", "停止采集服务", true, None::<&str>)?;
+                let exit = MenuItem::with_id(app, "exit", "退出", true, None::<&str>)?;
+                let menu = Menu::with_items(app, &[&open, &start, &stop, &exit])?;
+                TrayIconBuilder::with_id("main")
+                    .tooltip("远程环境采集器")
+                    .menu(&menu)
+                    .on_menu_event(move |app, event| match event.id.as_ref() {
+                        "open" => {
+                            if let Some(window) = app.get_webview_window("main") {
+                                let _ = window.show();
+                                let _ = window.set_focus();
+                            }
                         }
-                    }
-                    "start" => {
-                        let state = app.state::<AppState>();
-                        let _ = start_runtime(app.clone(), state);
-                    }
-                    "stop" => {
-                        let state = app.state::<AppState>();
-                        let _ = stop_runtime(app.clone(), state);
-                    }
-                    "exit" => {
-                        stop_for_exit(app);
-                        app.exit(0);
-                    }
-                    _ => {}
-                })
-                .build(app)?;
+                        "start" => {
+                            let state = app.state::<AppState>();
+                            let _ = start_runtime(app.clone(), state);
+                        }
+                        "stop" => {
+                            let state = app.state::<AppState>();
+                            let _ = stop_runtime(app.clone(), state);
+                        }
+                        "exit" => {
+                            stop_for_exit(app);
+                            app.exit(0);
+                        }
+                        _ => {}
+                    })
+                    .build(app)?;
+            }
             if tray_start {
-                // Tray auto-start: keep the main window hidden and begin
-                // collection immediately, matching the tray "start" action.
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.hide();
                 }
-                info("收到 --tray 参数，隐藏主窗口并自动开始采集");
-                let handle = app.handle().clone();
-                std::thread::spawn(move || {
-                    std::thread::sleep(Duration::from_millis(500));
-                    let state = handle.state::<AppState>();
-                    match start_runtime(handle.clone(), state) {
+                info("收到 --tray 参数，隐藏主窗口");
+            }
+            // Windows and Android share the same unattended-start rule: once a
+            // selected server exists, start collection immediately on launch.
+            let startup_handle = app.handle().clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(500));
+                let state = startup_handle.state::<AppState>();
+                let configured = load_config(&state.state_path, &state.state_cache_path)
+                    .map(|(_, config)| !config.selected_servers().is_empty())
+                    .unwrap_or(false);
+                if configured {
+                    match start_runtime(startup_handle.clone(), state) {
                         Ok(status) => info(format!(
-                            "托盘模式自动采集已启动 collection_running={}",
+                            "检测到已配置服务器，自动采集已启动 collection_running={}",
                             status.collection_running
                         )),
-                        Err(message) => {
-                            warn(format!("托盘模式自动启动采集失败: {message}"));
-                        }
+                        Err(message) => warn(format!("启动时自动采集失败: {message}")),
                     }
-                });
-            }
+                } else {
+                    info("启动时未检测到已选服务器，保持采集停止");
+                }
+            });
             spawn_status_bridge(handle);
             Ok(())
         })
@@ -1090,9 +1676,24 @@ pub fn run(tray_start: bool) {
             set_server_enabled,
             scan_wifi_now,
             scan_bluetooth_now,
+            scan_android_environment_now,
             test_server_profile,
             get_state_info,
             cleanup_state_cache,
+            get_persistence_settings,
+            set_foreground_service_enabled,
+            set_auto_start_enabled,
+            request_auto_start_permission,
+            set_hide_from_recents,
+            request_accessibility_permission,
+            request_home_settings,
+            request_battery_optimization_exemption,
+            set_root_support_enabled,
+            request_device_admin,
+            request_background_location,
+            set_dhizuku_compat_enabled,
+            list_dhizuku_apps,
+            set_dhizuku_app_authorization,
             start_runtime,
             stop_runtime
         ])
@@ -1125,4 +1726,9 @@ pub fn run(tray_start: bool) {
             tauri::RunEvent::ExitRequested { .. } => stop_for_exit(app),
             _ => {}
         });
+}
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    run_app(false);
 }

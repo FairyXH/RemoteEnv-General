@@ -18,16 +18,26 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 remote-env-core = { path = "../../../crates/core" }
-remote-env-platform-windows = { path = "../../../crates/platform-windows" }
 tauri = { version = "2", features = ["tray-icon"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 log = "0.4"
 tokio = { version = "1", features = ["time"] }
-tokio-tungstenite = { version = "0.26", features = ["native-tls"] }
-native-tls = "0.2"
 futures-util = "0.3"
 uuid = { version = "1", features = ["v4"] }
 base64 = "0.22"
 [target.'cfg(windows)'.dependencies]
+remote-env-platform-windows = { path = "../../../crates/platform-windows" }
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_System_Memory", "Win32_System_Threading"] }
+tokio-tungstenite = { version = "0.26", features = ["native-tls"] }
+native-tls = "0.2"
+
+[target.'cfg(target_os = "android")'.dependencies]
+remote-env-platform-android = { path = "../../../crates/platform-android" }
+jni = "0.21"
+tokio-tungstenite = { version = "0.26", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
+rustls = { version = "0.23", default-features = false, features = ["std", "ring"] }
+
+[target.'cfg(not(any(windows, target_os = "android")))'.dependencies]
+tokio-tungstenite = { version = "0.26", features = ["native-tls"] }
+native-tls = "0.2"
