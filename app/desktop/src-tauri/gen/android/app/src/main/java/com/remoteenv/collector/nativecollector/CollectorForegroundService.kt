@@ -9,14 +9,22 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.IBinder
-import android.os.Handler
-import android.os.Looper
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.remoteenv.collector.MainActivity
 import com.remoteenv.collector.R
+import org.json.JSONObject
+import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.TimeUnit
 
 class CollectorForegroundService : Service() {
+  private val collectorExecutor = Executors.newSingleThreadScheduledExecutor { task ->
+    Thread(task, "remote-env-headless-collector").apply { isDaemon = true }
+  }
+  @Volatile private var collectionTask: ScheduledFuture<*>? = null
+
   override fun onBind(intent: Intent?): IBinder? = null
 
   override fun onCreate() {
@@ -37,10 +45,38 @@ class CollectorForegroundService : Service() {
   }
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-    Handler(Looper.getMainLooper()).post {
-      runCatching { MainActivity.ensureBackgroundRuntime(applicationContext) }
-    }
+    startHeadlessRuntime()
     return START_STICKY
+  }
+
+  private fun startHeadlessRuntime() {
+    if (collectionTask?.isCancelled == false && collectionTask?.isDone == false) return
+    collectorExecutor.execute {
+      val result = runCatching { HeadlessRuntime.start(applicationContext) }
+        .getOrElse { "{\"error\":${JSONObject.quote(it.message ?: it.javaClass.simpleName)}}" }
+      val error = runCatching { JSONObject(result).optString("error").takeIf(String::isNotBlank) }.getOrNull()
+      if (error != null) {
+        Log.e(TAG, "Headless runtime start failed: $error")
+        return@execute
+      }
+      scheduleCollection(0)
+    }
+  }
+
+  private fun scheduleCollection(delayMillis: Long) {
+    collectionTask = collectorExecutor.schedule({
+      try {
+        val events = EnvironmentCollectorPlugin.collectAllEvents(applicationContext)
+        val result = HeadlessRuntime.nativeSubmitEvents(events.toString())
+        if (result != "ok") Log.e(TAG, "Headless event submit failed: $result")
+      } catch (error: Exception) {
+        Log.e(TAG, "Headless collection failed", error)
+      } finally {
+        val next = runCatching { HeadlessRuntime.nativeIntervalMillis() }
+          .getOrDefault(30_000L).coerceAtLeast(1_000L)
+        scheduleCollection(next)
+      }
+    }, delayMillis, TimeUnit.MILLISECONDS)
   }
 
   override fun onTaskRemoved(rootIntent: Intent?) {
@@ -53,9 +89,17 @@ class CollectorForegroundService : Service() {
     super.onTaskRemoved(rootIntent)
   }
 
+  override fun onDestroy() {
+    collectionTask?.cancel(true)
+    collectorExecutor.shutdownNow()
+    runCatching { HeadlessRuntime.nativeStop() }
+    super.onDestroy()
+  }
+
   companion object {
     private const val CHANNEL = "remote_env_collection"
     private const val NOTIFICATION_ID = 1002
+    private const val TAG = "RemoteEnvCollector"
     fun setEnabled(context: Context, enabled: Boolean) {
       val intent = Intent(context, CollectorForegroundService::class.java)
       if (enabled) ContextCompat.startForegroundService(context, intent) else context.stopService(intent)
