@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">"RemoteEnvCollector"</string>
+    <string name="main_activity_title">"RemoteEnvCollector"</string>
+    <string name="device_admin_description">用于设备所有者模式下提高后台稳定性，并可选提供 Dhizuku 兼容服务。</string>
+    <string name="accessibility_service_label">采集器后台维护服务</string>
+    <string name="accessibility_service_description">仅用于维护本应用采集服务，不读取界面内容，也不执行点击或手势。</string>
+</resources>

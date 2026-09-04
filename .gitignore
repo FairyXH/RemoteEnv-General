@@ -2,7 +2,6 @@
 /app/ui/node_modules/
 /app/ui/dist/
 /app/desktop/src-tauri/target/
-/app/desktop/src-tauri/gen/
 /.idea/
 /.vscode/
 *.log
