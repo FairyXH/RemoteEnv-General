@@ -52,6 +52,7 @@ class CollectorForegroundService : Service() {
   private fun startHeadlessRuntime() {
     if (collectionTask?.isCancelled == false && collectionTask?.isDone == false) return
     collectorExecutor.execute {
+      Log.i(TAG, "Starting headless runtime from dataDir=${applicationContext.dataDir.absolutePath}")
       val result = runCatching { HeadlessRuntime.start(applicationContext) }
         .getOrElse { "{\"error\":${JSONObject.quote(it.message ?: it.javaClass.simpleName)}}" }
       val error = runCatching { JSONObject(result).optString("error").takeIf(String::isNotBlank) }.getOrNull()

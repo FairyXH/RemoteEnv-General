@@ -324,7 +324,7 @@ class EnvironmentCollectorPlugin(private val host: Activity) : Plugin(host) {
       adapter.bluetoothLeScanner?.startScan(callback); latch.await(4, TimeUnit.SECONDS); adapter.bluetoothLeScanner?.stopScan(callback)
     } catch (_: Exception) {}
     try { adapter.bondedDevices.orEmpty().forEach { device ->
-      found.putIfAbsent(device.address, JSONObject().put("address", device.address).put("address_type", "unknown")
+      found.putIfAbsent(device.address, JSONObject().put("address", device.address).put("address_type", "unknown").put("mode", "classic")
         .put("name", device.name).put("is_connected", JSONObject.NULL).put("is_paired", true)
         .put("rssi", JSONObject.NULL).put("tx_power", JSONObject.NULL).put("manufacturer_id", JSONObject.NULL)
         .put("manufacturer_data", JSONObject.NULL).put("service_uuids", JSONArray()).put("service_data", JSONObject())
@@ -341,7 +341,7 @@ class EnvironmentCollectorPlugin(private val host: Activity) : Plugin(host) {
     val serviceData = JSONObject(); record?.serviceData?.forEach { (key, value) -> serviceData.put(key.uuid.toString().lowercase(), Base64.getEncoder().encodeToString(value)) }
     var manufacturerId: Int? = null; var manufacturer: String? = null
     record?.manufacturerSpecificData?.let { values -> if (values.size() > 0) { manufacturerId = values.keyAt(0); manufacturer = Base64.getEncoder().encodeToString(values.valueAt(0)) } }
-    return JSONObject().put("address", result.device.address).put("address_type", "unknown")
+    return JSONObject().put("address", result.device.address).put("address_type", "unknown").put("mode", "ble")
       .put("name", record?.deviceName).put("is_connected", JSONObject.NULL)
       .put("is_paired", try { result.device.bondState == android.bluetooth.BluetoothDevice.BOND_BONDED } catch (_: SecurityException) { null })
       .put("rssi", result.rssi.toDouble()).put("tx_power", record?.txPowerLevel?.takeUnless { it == Int.MIN_VALUE }?.toDouble())

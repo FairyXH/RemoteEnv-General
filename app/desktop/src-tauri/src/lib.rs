@@ -525,6 +525,14 @@ mod android_headless {
         runtime: Option<RuntimeSupervisor>,
         data_dir: Option<PathBuf>,
         scan_interval_seconds: u64,
+        wifi_runtime: remote_env_core::runtime::WiFiRuntimeStatus,
+        bluetooth_runtime: remote_env_core::runtime::BluetoothRuntimeStatus,
+        wifi_snapshot: Option<serde_json::Value>,
+        bluetooth_snapshot: Option<serde_json::Value>,
+        cell_snapshot: Option<serde_json::Value>,
+        gps_snapshot: Option<serde_json::Value>,
+        gnss_snapshot: Option<serde_json::Value>,
+        status_dirty: bool,
     }
 
     static STATE: OnceLock<Mutex<HeadlessState>> = OnceLock::new();
@@ -586,34 +594,112 @@ mod android_headless {
 
     pub(super) fn submit(events_json: &str) -> Result<(), String> {
         let events: Vec<CollectorEvent> = serde_json::from_str(events_json).map_err(user_error)?;
-        let headless = state()
+        let mut headless = state()
             .lock()
             .map_err(|_| "后台服务状态不可用。".to_string())?;
-        let runtime = headless
-            .runtime
-            .as_ref()
-            .ok_or_else(|| "后台服务运行时尚未启动。".to_string())?;
         for event in events {
-            runtime.submit(event).map_err(user_error)?;
+            let data_type = event.data_type.clone();
+            let timestamp_ms = event.timestamp_ms;
+            let data = event.data.clone();
+            headless
+                .runtime
+                .as_ref()
+                .ok_or_else(|| "后台服务运行时尚未启动。".to_string())?
+                .submit(event)
+                .map_err(user_error)?;
+            match data_type.as_str() {
+                "wifi" => {
+                    headless.wifi_runtime.enabled = true;
+                    headless.wifi_runtime.state = remote_env_core::runtime::WiFiRuntimeState::Ready;
+                    headless.wifi_runtime.last_scan_ms = Some(timestamp_ms);
+                    headless.wifi_runtime.last_successful_scan_ms = Some(timestamp_ms);
+                    headless.wifi_runtime.network_count = data["networks"].as_array().map(Vec::len);
+                    headless.wifi_runtime.last_error = None;
+                    headless.wifi_runtime.total_scans += 1;
+                    headless.wifi_runtime.successful_scans += 1;
+                    headless.wifi_snapshot = Some(data);
+                }
+                "bluetooth" => {
+                    let devices = data["devices"].as_array();
+                    headless.bluetooth_runtime.enabled = true;
+                    headless.bluetooth_runtime.state =
+                        remote_env_core::runtime::WiFiRuntimeState::Ready;
+                    headless.bluetooth_runtime.device_count = devices.map(Vec::len);
+                    headless.bluetooth_runtime.ble_device_count = devices.map_or(0, |items| {
+                        items
+                            .iter()
+                            .filter(|item| {
+                                matches!(item["mode"].as_str(), Some("ble") | Some("dual"))
+                            })
+                            .count()
+                    });
+                    headless.bluetooth_runtime.classic_device_count = devices.map_or(0, |items| {
+                        items
+                            .iter()
+                            .filter(|item| {
+                                matches!(item["mode"].as_str(), Some("classic") | Some("dual"))
+                            })
+                            .count()
+                    });
+                    headless.bluetooth_runtime.last_scan_ms = Some(timestamp_ms);
+                    headless.bluetooth_runtime.last_successful_scan_ms = Some(timestamp_ms);
+                    headless.bluetooth_runtime.last_error = None;
+                    headless.bluetooth_runtime.total_scans += 1;
+                    headless.bluetooth_runtime.successful_scans += 1;
+                    headless.bluetooth_snapshot = Some(data);
+                }
+                "cell" => headless.cell_snapshot = Some(data),
+                "gps" => headless.gps_snapshot = Some(data),
+                "gnss" => headless.gnss_snapshot = Some(data),
+                _ => {}
+            }
         }
+        headless.status_dirty = true;
         Ok(())
     }
 
     pub(super) fn status() -> RuntimeStatus {
-        state()
-            .lock()
-            .ok()
-            .and_then(|headless| headless.runtime.as_ref().map(RuntimeSupervisor::status))
-            .unwrap_or_default()
+        state().lock().map_or_else(
+            |_| RuntimeStatus::default(),
+            |headless| decorated_status(&headless),
+        )
     }
 
     pub(super) fn status_if_changed() -> Option<RuntimeStatus> {
         state().lock().ok().and_then(|mut headless| {
-            headless
+            let runtime_changed = headless
                 .runtime
                 .as_mut()
-                .and_then(|runtime| runtime.status_has_changed().then(|| runtime.status()))
+                .is_some_and(RuntimeSupervisor::status_has_changed);
+            if runtime_changed || headless.status_dirty {
+                headless.status_dirty = false;
+                Some(decorated_status(&headless))
+            } else {
+                None
+            }
         })
+    }
+
+    fn decorated_status(headless: &HeadlessState) -> RuntimeStatus {
+        let mut status = headless
+            .runtime
+            .as_ref()
+            .map(RuntimeSupervisor::status)
+            .unwrap_or_default();
+        if headless.wifi_runtime.enabled {
+            status.wifi = remote_env_core::runtime::CollectorStatus::Ready;
+            status.wifi_runtime = headless.wifi_runtime.clone();
+        }
+        if headless.bluetooth_runtime.enabled {
+            status.bluetooth = remote_env_core::runtime::CollectorStatus::Ready;
+            status.bluetooth_runtime = headless.bluetooth_runtime.clone();
+        }
+        status.wifi_snapshot = headless.wifi_snapshot.clone();
+        status.bluetooth_snapshot = headless.bluetooth_snapshot.clone();
+        status.cell_snapshot = headless.cell_snapshot.clone();
+        status.gps_snapshot = headless.gps_snapshot.clone();
+        status.gnss_snapshot = headless.gnss_snapshot.clone();
+        status
     }
 
     pub(super) fn reconfigure(config: &ClientConfig) -> Result<(), String> {
