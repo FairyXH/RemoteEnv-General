@@ -350,7 +350,7 @@ function stateText(value: string) {
     Reconnecting: "正在重连",
     Connecting: "正在连接",
     Authenticating: "正在认证",
-    Blocked: "已阻止",
+    Blocked: "已暂停",
     Stopped: "已停止",
     Disabled: "已禁用",
     Starting: "正在启动",
@@ -598,7 +598,7 @@ function App() {
     );
     if (blocked) {
       setNotice(
-        `服务器连接被拒绝（${blocked.profile_id}）：${blocked.last_error ?? "未提供具体原因"}`,
+        `服务器已暂停（${blocked.profile_id}）：${blocked.last_error ?? "未提供具体原因"}`,
       );
     }
   }, [status.servers]);
@@ -1235,6 +1235,7 @@ function App() {
               (item) => item.profile_id === server.id,
             );
             const connected = live?.connection === "Ready";
+            const paused = live?.connection === "Blocked";
             const selected =
               server.enabled ||
               connected ||
@@ -1274,10 +1275,16 @@ function App() {
                         className="primary"
                         disabled={!serverActionAllowed(server.id)}
                         title={
-                          connected ? "断开服务器" : "建立持久 WebSocket 连接"
+                          paused
+                            ? "停用后可重新连接此服务器"
+                            : connected
+                              ? "断开服务器"
+                              : "建立持久 WebSocket 连接"
                         }
                         onClick={() =>
-                          connected ? disconnect(server.id) : connect(server.id)
+                          connected || paused
+                            ? disconnect(server.id)
+                            : connect(server.id)
                         }
                       >
                         {busy === `connect:${server.id}`
@@ -1285,9 +1292,11 @@ function App() {
                           : busy === `disconnect:${server.id}` ||
                               busy === `toggle:${server.id}`
                             ? "处理中..."
-                            : connected
-                              ? "断开"
-                              : "连接"}
+                            : paused
+                              ? "停用"
+                              : connected
+                                ? "断开"
+                                : "连接"}
                       </button>
                     </>
                   ) : (
@@ -1298,7 +1307,11 @@ function App() {
                         disabled={!serverActionAllowed(server.id)}
                         onChange={() => toggleServer(server)}
                       />{" "}
-                      {selected ? "已连接/连接中" : "启用"}
+                      {paused
+                        ? "已暂停（取消勾选后可重新启用）"
+                        : selected
+                          ? "已连接/连接中"
+                          : "启用"}
                     </label>
                   )}
                   <button title="编辑" onClick={() => edit(server)}>
