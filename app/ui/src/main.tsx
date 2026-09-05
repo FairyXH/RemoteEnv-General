@@ -1255,8 +1255,8 @@ function App() {
                     <label className="server-select">
                       <input type="radio" name="active-server" disabled={configBusy}
                         checked={config.active_server_id === server.id}
-                        onChange={() => saveOptions({ active_server_id: server.id })} />
-                      活动服务器
+                        onChange={() => connect(server.id)} />
+                      {config.active_server_id === server.id ? "当前服务器" : "切换到此服务器"}
                     </label>
                   ) : (
                     <label className="server-select">
