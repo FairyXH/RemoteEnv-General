@@ -521,7 +521,7 @@ function App() {
         ) {
           return { ...server, connection: "Connecting" };
         }
-        if (["Connecting", "Authenticating", "Reconnecting", "Ready"].includes(server.connection))
+        if (["Authenticating", "Reconnecting", "Ready"].includes(server.connection))
           delete pendingConnections[server.profile_id];
         return server;
       }),
@@ -737,7 +737,7 @@ function App() {
     } catch (error) {
       delete pendingConnectionsRef.current[id];
       setConfig(previous);
-      void reload();
+      void reload().catch(() => undefined);
       setNotice(`服务器连接失败：${String(error)}`);
     } finally {
       serverBusyRef.current[id] = false;
@@ -1236,13 +1236,14 @@ function App() {
             const live = status.servers.find(
               (item) => item.profile_id === server.id,
             );
-            const connected = live?.connection === "Ready";
             const selected = server.enabled && (config.server_mode === "Multi" || config.active_server_id === server.id);
+            const canDisconnect = selected && (pendingConnectionsRef.current[server.id] ||
+              (live !== undefined && !["Stopped", "Disconnected"].includes(live.connection)));
             const connecting = busy === `connect:${server.id}` ||
               (selected && ["Connecting", "Connected", "Authenticating"].includes(live?.connection ?? ""));
             const retrySeconds = live?.next_retry_at_ms == null ? null :
               Math.max(0, Math.ceil((live.next_retry_at_ms - clock) / 1000));
-            const heartbeat = live
+            const heartbeat = selected && live
               ? heartbeatHealth(live, clock)
               : { className: "heartbeat-off", text: "未连接" };
             return (
@@ -1268,7 +1269,7 @@ function App() {
                   <span>{server.url}</span>
                   <small>
                     设备 ID: {server.device_id} ·{" "}
-                    {connecting ? "正在连接" : stateText(selected ? live?.connection ?? "Connecting" : "Stopped")} ·{" "}
+                    {connecting ? "正在连接" : stateText(selected ? live?.connection ?? "Stopped" : "Stopped")} ·{" "}
                     <b className={heartbeat.className}>● {heartbeat.text}</b>
                     {selected && live?.connection === "Reconnecting" && retrySeconds !== null && (
                       <span className="retry-countdown" role="timer">{retrySeconds > 0 ? `${retrySeconds} 秒后重试` : "即将重试…"}</span>
@@ -1282,9 +1283,9 @@ function App() {
                       <button
                         className="primary"
                         disabled={!serverActionAllowed(server.id)}
-                        title={selected ? "断开并停止重试此服务器" : "连接服务器"}
+                        title={canDisconnect ? "断开并停止重试此服务器" : "连接服务器"}
                         onClick={() =>
-                          selected
+                          canDisconnect
                             ? disconnect(server.id)
                             : connect(server.id)
                         }
@@ -1294,7 +1295,7 @@ function App() {
                           : busy === `disconnect:${server.id}` ||
                               busy === `toggle:${server.id}`
                             ? "处理中..."
-                            : selected
+                            : canDisconnect
                                 ? "断开"
                                 : "连接"}
                       </button>
