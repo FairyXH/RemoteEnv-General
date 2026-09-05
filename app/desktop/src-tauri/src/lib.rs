@@ -1250,6 +1250,13 @@ fn set_runtime_options(
     config.scan_interval_seconds = scan_interval_seconds;
     config.upload_interval_seconds = upload_interval_seconds;
     if config.server_mode == ServerMode::Single && !config.server_profiles.is_empty() {
+        if let Some(profile) = config
+            .server_profiles
+            .iter_mut()
+            .find(|profile| Some(profile.id.as_str()) == config.active_server_id.as_deref())
+        {
+            profile.enabled = true;
+        }
         let active_is_valid = config.active_server_id.as_deref().is_some_and(|active| {
             config
                 .server_profiles
@@ -1354,7 +1361,13 @@ fn connect_server_profile(
                 failed: 0,
             });
     }
-    status.connection = remote_env_core::transport::ConnectionState::Connecting;
+    if !status
+        .servers
+        .iter()
+        .any(|server| server.connection == remote_env_core::transport::ConnectionState::Ready)
+    {
+        status.connection = remote_env_core::transport::ConnectionState::Connecting;
+    }
     let _ = app.emit(STATUS_EVENT, &status);
     info("服务器连接命令已提交");
     Ok(status)
