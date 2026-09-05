@@ -135,7 +135,7 @@ impl Drop for SingleInstanceGuard {
 #[cfg(not(windows))]
 struct SingleInstanceGuard;
 
-fn acquire_instance_guard() -> Result<SingleInstanceGuard, String> {
+fn acquire_instance_guard(_identifier: &str) -> Result<SingleInstanceGuard, String> {
     #[cfg(windows)]
     {
         use std::os::windows::ffi::OsStrExt;
@@ -143,7 +143,12 @@ fn acquire_instance_guard() -> Result<SingleInstanceGuard, String> {
             Foundation::{ERROR_ALREADY_EXISTS, GetLastError},
             System::Threading::CreateMutexW,
         };
-        let name: Vec<u16> = std::ffi::OsStr::new("Global\\RemoteEnvCollector.SingleInstance")
+        let mutex_name = if _identifier == "com.remoteenv.collector" {
+            "Global\\RemoteEnvCollector.SingleInstance".to_string()
+        } else {
+            format!("Global\\{_identifier}.SingleInstance")
+        };
+        let name: Vec<u16> = std::ffi::OsStr::new(&mutex_name)
             .encode_wide()
             .chain(std::iter::once(0))
             .collect();
@@ -711,6 +716,23 @@ mod android_headless {
             runtime.update_config(config.clone()).map_err(user_error)?;
         }
         Ok(())
+    }
+
+    pub(super) fn connect(
+        config: &ClientConfig,
+        store: StateStore,
+    ) -> Result<RuntimeStatus, String> {
+        let mut headless = state()
+            .lock()
+            .map_err(|_| "后台服务状态不可用。".to_string())?;
+        if let Some(runtime) = headless.runtime.as_ref() {
+            runtime.update_config(config.clone()).map_err(user_error)?;
+        } else {
+            headless.runtime =
+                Some(RuntimeSupervisor::start(config.clone(), store).map_err(user_error)?);
+        }
+        headless.status_dirty = true;
+        Ok(decorated_status(&headless))
     }
 
     fn interval_millis() -> i64 {
@@ -1286,19 +1308,24 @@ fn connect_server_profile(
     }
     config.validate().map_err(user_error)?;
     save_config(&store, &config)?;
-    let mut guard = state
-        .runtime
-        .lock()
-        .map_err(|_| "应用状态不可用。".to_string())?;
-    if let Some(runtime) = guard.as_ref() {
-        runtime.update_config(config.clone()).map_err(user_error)?;
-    } else {
-        *guard = Some(make_runtime(config.clone(), store, &app)?);
-    }
-    let initial_status = guard
-        .as_ref()
-        .map(RuntimeSupervisor::status)
-        .unwrap_or_default();
+    #[cfg(target_os = "android")]
+    let initial_status = android_headless::connect(&config, store)?;
+    #[cfg(not(target_os = "android"))]
+    let initial_status = {
+        let mut guard = state
+            .runtime
+            .lock()
+            .map_err(|_| "应用状态不可用。".to_string())?;
+        if let Some(runtime) = guard.as_ref() {
+            runtime.update_config(config.clone()).map_err(user_error)?;
+        } else {
+            *guard = Some(make_runtime(config.clone(), store, &app)?);
+        }
+        guard
+            .as_ref()
+            .map(RuntimeSupervisor::status)
+            .unwrap_or_default()
+    };
     let mut status = initial_status;
     if let Some(server) = status
         .servers
@@ -1308,6 +1335,8 @@ fn connect_server_profile(
         server.connection = remote_env_core::transport::ConnectionState::Connecting;
         server.heartbeat_alive = false;
         server.last_heartbeat_ms = None;
+        server.next_retry_at_ms = None;
+        server.last_error = None;
     } else {
         status
             .servers
@@ -1676,7 +1705,8 @@ pub fn run_app(tray_start: bool) {
             let cache =
                 state_cache_path(&app.handle()).map_err(|error| std::io::Error::other(error))?;
             let log = log_path(&app.handle()).map_err(|error| std::io::Error::other(error))?;
-            let guard = acquire_instance_guard().map_err(std::io::Error::other)?;
+            let guard =
+                acquire_instance_guard(&app.config().identifier).map_err(std::io::Error::other)?;
             app.manage(AppState {
                 runtime: Mutex::new(None),
                 state_path: path,
