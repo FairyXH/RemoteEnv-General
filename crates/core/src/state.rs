@@ -57,6 +57,12 @@ impl StateStore {
     fn open_state(path: &Path) -> Result<Connection, StateError> {
         match Self::try_open_state(path) {
             Ok(connection) => Ok(connection),
+            Err(error)
+                if !matches!(&error, StateError::Database(rusqlite::Error::SqliteFailure(code, _))
+                if matches!(code.code, rusqlite::ErrorCode::DatabaseCorrupt | rusqlite::ErrorCode::NotADatabase)) =>
+            {
+                Err(error)
+            }
             Err(error) => {
                 eprintln!("state cache open failed, rebuilding from empty: {error}");
                 Self::remove_sidecar(path, "-wal");
@@ -74,7 +80,12 @@ impl StateStore {
         connection.execute_batch(STATE_SCHEMA)?;
         // Force a trivial read so a corrupt page is surfaced here, not later.
         connection.query_row("SELECT 1", [], |row| row.get::<_, i64>(0))?;
-        Self::normalize_legacy_sequences(&connection)?;
+        if connection.pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))? < 1 {
+            let transaction = connection.unchecked_transaction()?;
+            Self::normalize_legacy_sequences(&transaction)?;
+            transaction.pragma_update(None, "user_version", 1)?;
+            transaction.commit()?;
+        }
         Ok(connection)
     }
 
@@ -208,9 +219,10 @@ impl StateStore {
                 let original_payload = envelope.data.clone();
                 envelope.normalize_for_transport();
                 let payload_changed = envelope.data != original_payload;
-                let sequence_changed = envelope.sequence < floor;
+                // Timestamp sequences already in use must retain their ACK identity.
+                let sequence_changed = envelope.sequence < 1_000_000_000_000;
                 if sequence_changed {
-                    envelope.sequence = floor;
+                    envelope.sequence = floor.saturating_add(id as u64);
                 }
                 if payload_changed || sequence_changed {
                     let update = format!(

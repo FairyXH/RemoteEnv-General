@@ -14,6 +14,35 @@ use tokio::net::TcpListener;
 use tokio_tungstenite::{accept_async, tungstenite::Message};
 
 #[test]
+fn reopening_config_preserves_in_flight_delivery_and_sequence() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.sqlite3");
+    let cache = dir.path().join("cache.sqlite3");
+    let store = StateStore::open(&path, &cache).unwrap();
+    let envelope = EnvironmentEnvelope::with_timestamp(
+        "reopen-device",
+        "wifi",
+        1_700_000_000_000,
+        1_700_000_000_000,
+        serde_json::json!({"mock": true}),
+    );
+    store.enqueue_target("a", &envelope).unwrap();
+    let (id, _) = store.pending_target("a").unwrap().remove(0);
+    store.claim_target("a", id).unwrap();
+    for _ in 0..3 {
+        let reopened = StateStore::open(&path, &cache).unwrap();
+        assert_eq!(
+            reopened
+                .delivery_status("a", "reopen-device", "wifi", envelope.sequence)
+                .unwrap()
+                .as_deref(),
+            Some("in_flight")
+        );
+        assert!(reopened.pending_target("a").unwrap().is_empty());
+    }
+}
+
+#[test]
 fn sequence_is_atomic_and_survives_reopen() {
     let dir = tempdir().unwrap();
     let path = dir.path().join("state.sqlite3");
