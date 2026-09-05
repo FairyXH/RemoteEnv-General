@@ -42,6 +42,7 @@ type RuntimeStatus = {
     heartbeat_alive: boolean;
     last_heartbeat_ms: number | null;
     last_error?: string | null;
+    next_retry_at_ms?: number | null;
     pending: number;
     in_flight: number;
     blocked: number;
@@ -411,14 +412,20 @@ function App() {
   const [busy, setBusy] = React.useState<string | null>(null);
   const runtimeBusyRef = React.useRef(false);
   const serverBusyRef = React.useRef<Record<string, boolean>>({});
-  const [lastServerAction, setLastServerAction] = React.useState<
-    Record<string, number>
-  >({});
+  const configBusyRef = React.useRef(false);
+  const [configBusy, setConfigBusy] = React.useState(false);
   const serverActionAllowed = (id: string) =>
-    !serverBusyRef.current[id] &&
-    (!lastServerAction[id] || Date.now() - lastServerAction[id] >= 1000);
-  const markServerAction = (id: string) =>
-    setLastServerAction((current) => ({ ...current, [id]: Date.now() }));
+    !configBusyRef.current && !serverBusyRef.current[id];
+  const beginConfigChange = () => {
+    if (configBusyRef.current) return false;
+    configBusyRef.current = true;
+    setConfigBusy(true);
+    return true;
+  };
+  const endConfigChange = () => {
+    configBusyRef.current = false;
+    setConfigBusy(false);
+  };
   const [scanBusy, setScanBusy] = React.useState<
     Record<CollectorKind, boolean>
   >({ wifi: false, bluetooth: false, cell: false, gps: false, gnss: false });
@@ -514,7 +521,7 @@ function App() {
         ) {
           return { ...server, connection: "Connecting" };
         }
-        if (server.connection === "Ready")
+        if (["Connecting", "Authenticating", "Reconnecting", "Ready"].includes(server.connection))
           delete pendingConnections[server.profile_id];
         return server;
       }),
@@ -603,6 +610,9 @@ function App() {
     }
   }, [status.servers]);
   const saveOptions = async (next: Partial<Config>) => {
+    if (!beginConfigChange()) return;
+    const previous = config;
+    setConfig((current) => ({ ...current, ...next }));
     try {
       const result = await invoke<Config>("set_runtime_options", {
         serverMode: next.server_mode ?? config.server_mode,
@@ -619,7 +629,10 @@ function App() {
       });
       setConfig(result);
     } catch (error) {
+      setConfig(previous);
       setNotice(`保存采集服务设置失败：${String(error)}`);
+    } finally {
+      endConfigChange();
     }
   };
   const openNew = () => {
@@ -701,11 +714,19 @@ function App() {
     }
   };
   const connect = async (id: string) => {
-    if (!serverActionAllowed(id)) return;
+    if (!serverActionAllowed(id) || !beginConfigChange()) return;
+    const previous = config;
     pendingConnectionsRef.current[id] = true;
     serverBusyRef.current[id] = true;
-    markServerAction(id);
     setBusy(`connect:${id}`);
+    setConfig((current) => ({ ...current,
+      active_server_id: current.server_mode === "Single" ? id : current.active_server_id,
+      server_profiles: current.server_profiles.map(server => server.id === id ? {...server, enabled: true} : server),
+    }));
+    setStatus((current) => ({ ...current, servers: [
+      ...current.servers.filter(server => server.profile_id !== id),
+      { profile_id: id, connection: "Connecting", heartbeat_alive: false, last_heartbeat_ms: null, next_retry_at_ms: null, pending: 0, in_flight: 0, blocked: 0 },
+    ] }));
     setNotice("正在建立持久连接...");
     try {
       const result = await invoke<RuntimeStatus>("connect_server_profile", {
@@ -715,17 +736,21 @@ function App() {
       setNotice("服务器连接已提交，等待认证结果。");
     } catch (error) {
       delete pendingConnectionsRef.current[id];
+      setConfig(previous);
+      void reload();
       setNotice(`服务器连接失败：${String(error)}`);
     } finally {
       serverBusyRef.current[id] = false;
       setBusy(null);
+      endConfigChange();
     }
   };
   const disconnect = async (id: string) => {
-    if (!serverActionAllowed(id)) return;
+    if (!serverActionAllowed(id) || !beginConfigChange()) return;
+    const previous = config;
     delete pendingConnectionsRef.current[id];
     serverBusyRef.current[id] = true;
-    markServerAction(id);
+    setConfig((current) => ({ ...current, server_profiles: current.server_profiles.map(server => server.id === id ? {...server, enabled: false} : server) }));
     setBusy(`disconnect:${id}`);
     setNotice("正在断开服务器...");
     try {
@@ -743,44 +768,17 @@ function App() {
       }));
       setNotice("服务器已断开。");
     } catch (error) {
+      setConfig(previous);
       setNotice(`服务器断开失败：${String(error)}`);
     } finally {
       serverBusyRef.current[id] = false;
       setBusy(null);
+      endConfigChange();
     }
   };
   const toggleServer = async (server: Server) => {
-    if (serverBusyRef.current[server.id] || !serverActionAllowed(server.id))
-      return;
-    serverBusyRef.current[server.id] = true;
-    markServerAction(server.id);
-    setBusy(`toggle:${server.id}`);
-    try {
-      const result = await invoke<RuntimeStatus>("set_server_enabled", {
-        id: server.id,
-        enabled: !server.enabled,
-      });
-      applyStatus(result);
-      setConfig((current) => ({
-        ...current,
-        active_server_id: !server.enabled
-          ? server.id
-          : current.active_server_id === server.id
-            ? null
-            : current.active_server_id,
-        server_profiles: current.server_profiles.map((item) =>
-          item.id === server.id ? { ...item, enabled: !server.enabled } : item,
-        ),
-      }));
-      setNotice(
-        !server.enabled ? "服务器已启用，采集服务状态不变。" : "服务器已断开。",
-      );
-    } catch (error) {
-      setNotice(`服务器切换失败：${String(error)}`);
-    } finally {
-      serverBusyRef.current[server.id] = false;
-      setBusy(null);
-    }
+    if (server.enabled) await disconnect(server.id);
+    else await connect(server.id);
   };
   const scan = async (kind: CollectorKind) => {
     if (scanBusy[kind]) return;
@@ -1209,10 +1207,12 @@ function App() {
             ＋
           </button>
         </div>
-        <div className="options">
+        <div className="options server-modes" aria-busy={configBusy}>
           <label>
             <input
               type="radio"
+              name="server-mode"
+              disabled={configBusy}
               checked={config.server_mode === "Single"}
               onChange={() => saveOptions({ server_mode: "Single" })}
             />{" "}
@@ -1221,6 +1221,8 @@ function App() {
           <label>
             <input
               type="radio"
+              name="server-mode"
+              disabled={configBusy}
               checked={config.server_mode === "Multi"}
               onChange={() => saveOptions({ server_mode: "Multi" })}
             />{" "}
@@ -1235,90 +1237,73 @@ function App() {
               (item) => item.profile_id === server.id,
             );
             const connected = live?.connection === "Ready";
-            const paused = live?.connection === "Blocked";
-            const selected =
-              server.enabled ||
-              connected ||
-              ["Connecting", "Authenticating", "Reconnecting"].includes(
-                live?.connection ?? "",
-              );
+            const selected = server.enabled && (config.server_mode === "Multi" || config.active_server_id === server.id);
+            const connecting = busy === `connect:${server.id}` ||
+              (selected && ["Connecting", "Connected", "Authenticating"].includes(live?.connection ?? ""));
+            const retrySeconds = live?.next_retry_at_ms == null ? null :
+              Math.max(0, Math.ceil((live.next_retry_at_ms - clock) / 1000));
             const heartbeat = live
               ? heartbeatHealth(live, clock)
               : { className: "heartbeat-off", text: "未连接" };
             return (
               <article className="server" key={server.id}>
-                <div>
+                <div className="server-info">
+                  <div className="server-title">
                   <strong>{server.name}</strong>
+                  {config.server_mode === "Single" ? (
+                    <label className="server-select">
+                      <input type="radio" name="active-server" disabled={configBusy}
+                        checked={config.active_server_id === server.id}
+                        onChange={() => saveOptions({ active_server_id: server.id })} />
+                      活动服务器
+                    </label>
+                  ) : (
+                    <label className="server-select">
+                      <input type="checkbox" checked={server.enabled} disabled={!serverActionAllowed(server.id)}
+                        onChange={() => toggleServer(server)} />
+                      启用
+                    </label>
+                  )}
+                  </div>
                   <span>{server.url}</span>
                   <small>
                     设备 ID: {server.device_id} ·{" "}
-                    {stateText(live?.connection ?? "Stopped")} ·{" "}
+                    {connecting ? "正在连接" : stateText(selected ? live?.connection ?? "Connecting" : "Stopped")} ·{" "}
                     <b className={heartbeat.className}>● {heartbeat.text}</b>
+                    {selected && live?.connection === "Reconnecting" && retrySeconds !== null && (
+                      <span className="retry-countdown" role="timer">{retrySeconds > 0 ? `${retrySeconds} 秒后重试` : "即将重试…"}</span>
+                    )}
                     {live?.last_error && (
                       <em className="connection-error"> · {live.last_error}</em>
                     )}
                   </small>
                 </div>
-                <div className="actions">
-                  {config.server_mode === "Single" ? (
-                    <>
-                      <label title="设为活动服务器">
-                        <input
-                          type="radio"
-                          checked={config.active_server_id === server.id}
-                          onChange={() =>
-                            saveOptions({ active_server_id: server.id })
-                          }
-                        />
-                      </label>
+                <div className="actions server-actions">
                       <button
                         className="primary"
                         disabled={!serverActionAllowed(server.id)}
-                        title={
-                          paused
-                            ? "停用后可重新连接此服务器"
-                            : connected
-                              ? "断开服务器"
-                              : "建立持久 WebSocket 连接"
-                        }
+                        title={selected ? "断开并停止重试此服务器" : "连接服务器"}
                         onClick={() =>
-                          connected || paused
+                          selected
                             ? disconnect(server.id)
                             : connect(server.id)
                         }
                       >
-                        {busy === `connect:${server.id}`
-                          ? "连接中..."
+                        {connecting
+                          ? "正在连接…"
                           : busy === `disconnect:${server.id}` ||
                               busy === `toggle:${server.id}`
                             ? "处理中..."
-                            : paused
-                              ? "停用"
-                              : connected
+                            : selected
                                 ? "断开"
                                 : "连接"}
                       </button>
-                    </>
-                  ) : (
-                    <label className="server-check">
-                      <input
-                        type="checkbox"
-                        checked={selected}
-                        disabled={!serverActionAllowed(server.id)}
-                        onChange={() => toggleServer(server)}
-                      />{" "}
-                      {paused
-                        ? "已暂停（取消勾选后可重新启用）"
-                        : selected
-                          ? "已连接/连接中"
-                          : "启用"}
-                    </label>
-                  )}
-                  <button title="编辑" onClick={() => edit(server)}>
+                  <button title="编辑" disabled={configBusy} onClick={() => edit(server)}>
                     编辑
                   </button>
                   <button
                     title="测试连接"
+                    disabled={configBusy}
                     onClick={() => testServer(server.id)}
                   >
                     测试
@@ -1326,6 +1311,7 @@ function App() {
                   <button
                     className="danger"
                     title="删除"
+                    disabled={configBusy}
                     onClick={() => removeServer(server.id)}
                   >
                     删除

@@ -201,6 +201,58 @@ dt,
   gap: 4px;
   min-width: 0;
 }
+.server-info {
+  flex: 1;
+}
+.server-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.server-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  font-size: 12px;
+  color: #cbd7e2;
+  cursor: pointer;
+}
+input[type="radio"],
+input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  min-height: 18px;
+  margin: 0;
+  padding: 0;
+  flex-shrink: 0;
+  accent-color: #53b7a9;
+}
+.server small {
+  line-height: 1.8;
+  overflow-wrap: anywhere;
+}
+.server .retry-countdown {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 7px;
+  border-radius: 4px;
+  background: #3a3020;
+  color: #f2d58e;
+  font-variant-numeric: tabular-nums;
+}
+.server-actions {
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(56px, auto));
+  gap: 8px;
+}
+button:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
 .server strong {
   font-size: 14px;
 }
@@ -482,7 +534,7 @@ dt,
   }
   .server .actions {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
   .server .actions button {
     min-height: 42px;
@@ -490,6 +542,24 @@ dt,
   .server .actions > label {
     min-height: 42px;
     align-content: center;
+  }
+  .server-modes {
+    flex-direction: row;
+    gap: 8px;
+  }
+  .server-modes label {
+    flex: 1;
+    justify-content: center;
+    min-height: 44px;
+    border: 1px solid #415364;
+    border-radius: 6px;
+  }
+  .server-modes label:has(input:checked) {
+    border-color: #53b7a9;
+    background: #173c37;
+  }
+  .server-select {
+    min-height: 44px;
   }
   .collector {
     min-height: 0;

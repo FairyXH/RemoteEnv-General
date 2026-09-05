@@ -1129,7 +1129,7 @@ fn save_server_profile(
     Ok(config_view(&config))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn disconnect_server_profile(
     id: String,
     app: tauri::AppHandle,
@@ -1158,7 +1158,7 @@ fn disconnect_server_profile(
     Ok(status)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn set_server_enabled(
     id: String,
     enabled: bool,
@@ -1207,7 +1207,7 @@ fn delete_server_profile(
     Ok(config_view(&config))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn set_runtime_options(
     server_mode: ServerMode,
     active_server_id: Option<String>,
@@ -1257,7 +1257,7 @@ fn set_runtime_options(
     Ok(config_view(&config))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn connect_server_profile(
     id: String,
     app: tauri::AppHandle,
@@ -1274,8 +1274,9 @@ fn connect_server_profile(
         warn(format!("服务器配置不完整 profile_id={id}"));
         return Err("请先完善服务器的设备 ID 和令牌。".into());
     }
-    config.server_mode = ServerMode::Single;
-    config.active_server_id = Some(id.clone());
+    if config.server_mode == ServerMode::Single {
+        config.active_server_id = Some(id.clone());
+    }
     if let Some(profile) = config
         .server_profiles
         .iter_mut()
