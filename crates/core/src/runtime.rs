@@ -683,6 +683,7 @@ impl RuntimeSupervisor {
                                     .or_else(|| servers.iter().find(|s| s.connection == ConnectionState::Authenticating).map(|s| s.connection))
                                     .or_else(|| servers.iter().find(|s| s.connection == ConnectionState::Connecting).map(|s| s.connection))
                                     .or_else(|| servers.iter().find(|s| s.connection == ConnectionState::Reconnecting).map(|s| s.connection))
+                                    .or_else(|| servers.iter().find(|s| s.connection == ConnectionState::Blocked).map(|s| s.connection))
                                     .unwrap_or_else(|| if servers.is_empty() { ConnectionState::Stopped } else { ConnectionState::Connecting });
                                 snapshot.servers = servers;
                                 snapshot.pending = snapshot.servers.iter().map(|s| s.pending).sum();

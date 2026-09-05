@@ -28,7 +28,7 @@ struct TestServer {
 }
 
 #[test]
-fn rate_limited_reconnect_backoff_is_exponential_and_capped() {
+fn reconnect_backoff_is_exponential_and_capped() {
     let mut backoff = remote_env_core::transport::Backoff::new(1, 60);
     assert_eq!(backoff.next_delay_seconds(), 1);
     assert_eq!(backoff.next_delay_seconds(), 2);
@@ -459,6 +459,7 @@ async fn phase_175c_auth_failure_becomes_blocked_without_retry() {
     .await
     .unwrap();
     assert_eq!(a.ready.load(Ordering::SeqCst), 0);
+    assert_eq!(runtime.status().connection.to_string(), "Blocked");
     let attempts = a.auth_attempt_count();
     tokio::time::sleep(Duration::from_millis(1500)).await;
     assert_eq!(a.auth_attempt_count(), attempts);
@@ -531,12 +532,13 @@ async fn phase_175c_single_to_multi_and_rate_limit_keep_other_target_independent
     assert!(b.sequences().is_empty());
     let mut multi = single;
     multi.server_mode = ServerMode::Multi;
-    runtime.update_config(multi).unwrap();
+    runtime.update_config(multi.clone()).unwrap();
     wait_ready(&runtime, 2).await;
     b.rate_limit(true);
     runtime.submit(event("limited")).unwrap();
     a.wait_for(|server| server.sequences().len() >= 2).await;
-    b.wait_for(|server| server.sequences().len() >= 2).await;
+    b.wait_for(|server| !server.sequences().is_empty()).await;
+    wait_connection(&runtime, "b", "Blocked").await;
     let second_sequence = a.sequences()[1];
     wait_delivery_status(
         &store,
@@ -547,13 +549,52 @@ async fn phase_175c_single_to_multi_and_rate_limit_keep_other_target_independent
         "completed",
     )
     .await;
-    assert_ne!(
+    assert_eq!(
         store
             .delivery_status("b", "transition-device", "wifi", second_sequence)
             .unwrap()
             .as_deref(),
-        Some("completed")
+        Some("pending")
     );
+    let attempts = b.auth_attempt_count();
+    let uploads = b.sequences().len();
+    // Updating unrelated settings must not resume a paused worker.
+    runtime.update_config(multi.clone()).unwrap();
+    runtime.submit(event("after-limit")).unwrap();
+    a.wait_for(|server| server.sequences().len() >= 3).await;
+    let third_sequence = a.sequences()[2];
+    wait_delivery_status(
+        &store,
+        "a",
+        "transition-device",
+        "wifi",
+        third_sequence,
+        "completed",
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(2500)).await;
+    assert_eq!(b.auth_attempt_count(), attempts);
+    assert_eq!(b.sequences().len(), uploads);
+    let status = runtime.status();
+    let paused = status
+        .servers
+        .iter()
+        .find(|server| server.profile_id == "b")
+        .unwrap();
+    assert_eq!(paused.connection.to_string(), "Blocked");
+    assert_eq!(paused.in_flight, 0);
+    assert!(paused.last_error.as_deref().unwrap().contains("限速"));
+
+    b.rate_limit(false);
+    multi.server_profiles[1].enabled = false;
+    runtime.update_config(multi.clone()).unwrap();
+    wait_for_profiles(&runtime, &["a"]).await;
+    multi.server_profiles[1].enabled = true;
+    runtime.update_config(multi).unwrap();
+    wait_ready(&runtime, 2).await;
+    runtime.submit(event("resumed")).unwrap();
+    b.wait_for(|server| server.sequences().len() > uploads)
+        .await;
     runtime.stop();
 }
 

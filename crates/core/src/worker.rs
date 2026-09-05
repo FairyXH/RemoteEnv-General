@@ -52,7 +52,7 @@ pub enum WorkerError {
     Connection(String),
     #[error("worker transport failed")]
     Transport,
-    #[error("server rate limited uploads")]
+    #[error("服务器触发限速，已暂停该服务器上传；停用后重新启用可恢复")]
     RateLimited,
     #[error("worker protocol failed")]
     Protocol,
@@ -164,7 +164,10 @@ impl ServerWorker {
             }
             let _ = self.dispatcher.recover(&self.profile.id);
             self.refresh_counts();
-            if matches!(result, Err(WorkerError::Blocked(_))) {
+            if matches!(
+                result,
+                Err(WorkerError::Blocked(_) | WorkerError::RateLimited)
+            ) {
                 self.publish(ConnectionState::Blocked);
                 return;
             }
@@ -329,8 +332,7 @@ impl ServerWorker {
                             let ack: Ack = serde_json::from_value(value).map_err(|_| WorkerError::Protocol)?;
                             if !self.dispatcher.acknowledge(&self.profile.id, id, &ack, &envelope)? { return Err(WorkerError::Protocol); }
                             self.status.uploaded = self.status.uploaded.saturating_add(1);
-                            // Reset backoff only after a real upload ACK. A rate-limited
-                            // reconnect must continue escalating instead of looping at 1s.
+                            // Reset backoff only after a confirmed upload.
                             backoff.reset();
                             self.refresh_counts();
                         }
