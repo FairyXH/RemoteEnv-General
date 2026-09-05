@@ -125,7 +125,6 @@ pub struct ServerWorker {
     status_tx: watch::Sender<ServerWorkerStatus>,
     status: ServerWorkerStatus,
     heartbeat_interval: Duration,
-    heartbeat_monitor: HeartbeatMonitor,
 }
 
 impl ServerWorker {
@@ -144,7 +143,6 @@ impl ServerWorker {
             status_tx,
             status,
             heartbeat_interval,
-            heartbeat_monitor: HeartbeatMonitor::new(heartbeat_interval, Duration::from_secs(60)),
         }
     }
 
@@ -245,6 +243,11 @@ impl ServerWorker {
                 device_list
             )));
         }
+        // Heartbeat deadlines belong to this connection, never to a previous socket.
+        // Start the deadline now so a server that never sends a pong also times out.
+        let mut heartbeat_monitor =
+            HeartbeatMonitor::new(self.heartbeat_interval, Duration::from_secs(60));
+        heartbeat_monitor.mark_pong();
         self.publish(ConnectionState::Ready);
         self.status.last_error = None;
         let _ = self.status_tx.send(self.status.clone());
@@ -290,8 +293,8 @@ impl ServerWorker {
                     }
                 }
                 _ = heartbeat.tick() => {
-                    if self.heartbeat_monitor.is_timed_out() {
-                        return Err(WorkerError::Transport);
+                    if heartbeat_monitor.is_timed_out() {
+                        return Err(WorkerError::Connection("heartbeat pong timeout (60 seconds)".into()));
                     }
                     // The server contract is JSON text ping every five seconds.
                     socket.send(Message::Text(r#"{"type":"ping"}"#.into())).await.map_err(|_| WorkerError::Transport)?;
@@ -302,7 +305,7 @@ impl ServerWorker {
                     let value = match message {
                         Message::Text(text) => serde_json::from_str::<Value>(&text).map_err(|_| WorkerError::Protocol)?,
                         Message::Pong(_) => {
-                            self.heartbeat_monitor.mark_pong();
+                            heartbeat_monitor.mark_pong();
                             self.mark_heartbeat();
                             continue;
                         }
@@ -314,10 +317,10 @@ impl ServerWorker {
                         Message::Binary(_) | Message::Frame(_) => continue,
                     };
                     match classify_server_message(value["type"].as_str().unwrap_or_default(), value["code"].as_str()) {
-                        ServerEvent::Pong => { self.heartbeat_monitor.mark_pong(); self.mark_heartbeat(); }
+                        ServerEvent::Pong => { heartbeat_monitor.mark_pong(); self.mark_heartbeat(); }
                         ServerEvent::Invalid if value["type"] == "ping" => {
                             socket.send(Message::Text(r#"{"type":"pong"}"#.into())).await.map_err(|_| WorkerError::Transport)?;
-                            self.heartbeat_monitor.mark_pong();
+                            heartbeat_monitor.mark_pong();
                             self.mark_heartbeat();
                         }
                         ServerEvent::Ack => {

@@ -559,7 +559,17 @@ async fn phase_175c_single_to_multi_and_rate_limit_keep_other_target_independent
 
 #[tokio::test]
 async fn phase_175c_missing_pong_enters_reconnecting() {
+    verify_heartbeat_timeout_recovers(true).await;
+}
+
+#[tokio::test]
+async fn phase_175c_no_initial_pong_times_out_and_recovers() {
+    verify_heartbeat_timeout_recovers(false).await;
+}
+
+async fn verify_heartbeat_timeout_recovers(initial_pong: bool) {
     let a = TestServer::start().await;
+    a.pong(initial_pong);
     let b = TestServer::start().await;
     let dir = tempdir().unwrap();
     let store = StateStore::open(
@@ -580,9 +590,34 @@ async fn phase_175c_missing_pong_enters_reconnecting() {
     config.heartbeat_interval_seconds = 1;
     let mut runtime = RuntimeSupervisor::start(config, store).unwrap();
     wait_ready(&runtime, 1).await;
+    a.wait_for(|server| server.heartbeat_count() > 0).await;
+    if initial_pong {
+        wait_heartbeat_alive(&runtime).await;
+    }
     a.pong(false);
     wait_connection(&runtime, "a", "Reconnecting").await;
+    let previous_heartbeats = a.heartbeat_count();
+    a.pong(true);
+    a.wait_for(|server| server.heartbeat_count() > previous_heartbeats)
+        .await;
+    wait_ready(&runtime, 1).await;
+    wait_heartbeat_alive(&runtime).await;
     runtime.stop();
+}
+
+async fn wait_heartbeat_alive(runtime: &RuntimeSupervisor) {
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !runtime
+            .status()
+            .servers
+            .iter()
+            .any(|server| server.heartbeat_alive)
+        {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
 }
 
 #[tokio::test]
