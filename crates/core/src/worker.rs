@@ -20,6 +20,7 @@ pub struct ServerWorkerStatus {
     pub heartbeat_alive: bool,
     pub last_heartbeat_ms: Option<i64>,
     pub last_error: Option<String>,
+    pub next_retry_at_ms: Option<i64>,
     pub pending: usize,
     pub in_flight: usize,
     pub blocked: usize,
@@ -35,6 +36,7 @@ impl ServerWorkerStatus {
             heartbeat_alive: false,
             last_heartbeat_ms: None,
             last_error: None,
+            next_retry_at_ms: None,
             pending: 0,
             in_flight: 0,
             blocked: 0,
@@ -52,11 +54,11 @@ pub enum WorkerError {
     Connection(String),
     #[error("worker transport failed")]
     Transport,
-    #[error("服务器触发限速，已暂停该服务器上传；停用后重新启用可恢复")]
+    #[error("服务器触发限速，延长等待后自动重试")]
     RateLimited,
     #[error("worker protocol failed")]
     Protocol,
-    #[error("worker authentication is blocked: {0}")]
+    #[error("服务器拒绝请求，将自动重试: {0}")]
     Blocked(String),
     #[error("worker dispatcher failed: {0}")]
     Dispatcher(#[from] crate::dispatcher::DispatcherError),
@@ -148,9 +150,15 @@ impl ServerWorker {
 
     async fn run(mut self, mut stop: oneshot::Receiver<()>) {
         let mut backoff = Backoff::new(1, 60);
+        let mut rate_limit_delay = 30u64;
         loop {
             self.publish(ConnectionState::Connecting);
-            let result = self.run_connection(&mut stop, &mut backoff).await;
+            // Cancelling the whole connection also interrupts authentication and writes.
+            let result = tokio::select! {
+                biased;
+                _ = &mut stop => Err(WorkerError::Stopped),
+                result = self.run_connection(&mut backoff, &mut rate_limit_delay) => result,
+            };
             if let Err(error) = &result {
                 if !matches!(error, WorkerError::Stopped) {
                     self.status.failed = self.status.failed.saturating_add(1);
@@ -164,15 +172,15 @@ impl ServerWorker {
             }
             let _ = self.dispatcher.recover(&self.profile.id);
             self.refresh_counts();
-            if matches!(
-                result,
-                Err(WorkerError::Blocked(_) | WorkerError::RateLimited)
-            ) {
-                self.publish(ConnectionState::Blocked);
-                return;
-            }
+            let delay = if matches!(result, Err(WorkerError::RateLimited)) {
+                let delay = Duration::from_secs(rate_limit_delay);
+                rate_limit_delay = rate_limit_delay.saturating_mul(2).min(300);
+                delay
+            } else {
+                backoff.delay()
+            };
+            self.status.next_retry_at_ms = Some(now_ms() + delay.as_millis() as i64);
             self.publish(ConnectionState::Reconnecting);
-            let delay = backoff.delay();
             tokio::select! {
                 _ = tokio::time::sleep(delay) => {},
                 _ = &mut stop => { self.publish(ConnectionState::Stopped); return; }
@@ -182,8 +190,8 @@ impl ServerWorker {
 
     async fn run_connection(
         &mut self,
-        stop: &mut oneshot::Receiver<()>,
         backoff: &mut Backoff,
+        rate_limit_delay: &mut u64,
     ) -> Result<(), WorkerError> {
         #[cfg(not(target_os = "android"))]
         let connector = if self.profile.url.trim_start().starts_with("wss://") {
@@ -205,41 +213,42 @@ impl ServerWorker {
             None
         };
         let connect = connect_async_tls_with_config(&self.profile.url, None, false, connector);
-        let (mut socket, _) = tokio::select! {
-            _ = &mut *stop => return Err(WorkerError::Stopped),
-            result = tokio::time::timeout(Duration::from_secs(15), connect) => result
-                .map_err(|_| WorkerError::Connection("连接超时（15 秒）".into()))?
-                .map_err(|error| WorkerError::Connection(format!("连接 {url}: {error}", url = self.profile.url)))?,
-        };
+        let (mut socket, _) = tokio::time::timeout(Duration::from_secs(15), connect)
+            .await
+            .map_err(|_| WorkerError::Connection("连接超时（15 秒）".into()))?
+            .map_err(|error| {
+                WorkerError::Connection(format!("连接 {url}: {error}", url = self.profile.url))
+            })?;
         self.publish(ConnectionState::Connected);
         let auth = AuthFrame::collector(
             &self.profile.token,
             &self.identity,
             AuthFrame::platform_capabilities(&self.identity),
         );
-        socket
-            .send(Message::Text(
+        send_message(
+            &mut socket,
+            Message::Text(
                 serde_json::to_string(&auth)
                     .map_err(|_| WorkerError::Protocol)?
                     .into(),
-            ))
-            .await
-            .map_err(|_| WorkerError::Transport)?;
+            ),
+        )
+        .await?;
         self.publish(ConnectionState::Authenticating);
-        let auth_result = tokio::select! {
-            _ = &mut *stop => return Err(WorkerError::Stopped),
-            result = next_json(&mut socket) => result?,
-        };
+        let auth_result = handshake_json(&mut socket).await?;
+        if auth_result["code"] == "rate_limited" {
+            return Err(WorkerError::RateLimited);
+        }
         if auth_result["type"] != "auth_result" || auth_result["success"] != true {
             return Err(WorkerError::Blocked(format!(
                 "服务器认证拒绝: {}",
                 auth_result
             )));
         }
-        let device_list = tokio::select! {
-            _ = &mut *stop => return Err(WorkerError::Stopped),
-            result = next_json(&mut socket) => result?,
-        };
+        let device_list = handshake_json(&mut socket).await?;
+        if device_list["code"] == "rate_limited" {
+            return Err(WorkerError::RateLimited);
+        }
         if device_list["type"] != "device_list" {
             return Err(WorkerError::Blocked(format!(
                 "服务器协议拒绝: 认证后未收到 device_list，实际响应: {}",
@@ -274,21 +283,21 @@ impl ServerWorker {
                         self.refresh_counts();
                         continue;
                     }
-                    socket
-                        .send(Message::Text(
+                    send_message(
+                        &mut socket,
+                        Message::Text(
                             serde_json::to_string(&item.1)
                                 .map_err(|_| WorkerError::Protocol)?
                                 .into(),
-                        ))
-                        .await
-                        .map_err(|_| WorkerError::Transport)?;
+                        ),
+                    )
+                    .await?;
                     in_flight = Some(item);
                     in_flight_since = Some(tokio::time::Instant::now());
                     self.refresh_counts();
                 }
             }
             tokio::select! {
-                _ = &mut *stop => return Err(WorkerError::Stopped),
                 _ = delivery_poll.tick(), if in_flight.is_none() => {}
                 _ = upload_watchdog.tick(), if in_flight.is_some() => {
                     if in_flight_since.is_some_and(|started| started.elapsed() >= Duration::from_secs(30)) {
@@ -300,7 +309,7 @@ impl ServerWorker {
                         return Err(WorkerError::Connection("heartbeat pong timeout (60 seconds)".into()));
                     }
                     // The server contract is JSON text ping every five seconds.
-                    socket.send(Message::Text(r#"{"type":"ping"}"#.into())).await.map_err(|_| WorkerError::Transport)?;
+                    send_message(&mut socket, Message::Text(r#"{"type":"ping"}"#.into())).await?;
                 }
                 message = socket.next() => {
                     let Some(message) = message else { return Err(WorkerError::Transport); };
@@ -313,7 +322,7 @@ impl ServerWorker {
                             continue;
                         }
                         Message::Ping(payload) => {
-                            socket.send(Message::Pong(payload)).await.map_err(|_| WorkerError::Transport)?;
+                            send_message(&mut socket, Message::Pong(payload)).await?;
                             continue;
                         }
                         Message::Close(_) => return Err(WorkerError::Transport),
@@ -322,7 +331,7 @@ impl ServerWorker {
                     match classify_server_message(value["type"].as_str().unwrap_or_default(), value["code"].as_str()) {
                         ServerEvent::Pong => { heartbeat_monitor.mark_pong(); self.mark_heartbeat(); }
                         ServerEvent::Invalid if value["type"] == "ping" => {
-                            socket.send(Message::Text(r#"{"type":"pong"}"#.into())).await.map_err(|_| WorkerError::Transport)?;
+                            send_message(&mut socket, Message::Text(r#"{"type":"pong"}"#.into())).await?;
                             heartbeat_monitor.mark_pong();
                             self.mark_heartbeat();
                         }
@@ -334,11 +343,11 @@ impl ServerWorker {
                             self.status.uploaded = self.status.uploaded.saturating_add(1);
                             // Reset backoff only after a confirmed upload.
                             backoff.reset();
+                            *rate_limit_delay = 30;
                             self.refresh_counts();
                         }
                         ServerEvent::FatalError if value["code"] == "unknown_device" => {
-                            if let Some((id, envelope)) = in_flight.take() {
-                                self.dispatcher.block(&self.profile.id, id)?;
+                            if let Some((_id, envelope)) = in_flight.take() {
                                 self.status.last_error = Some(format!("服务器拒绝数据设备身份: profile_id={}, auth_device_id={}, envelope_device_id={}, response={}", self.profile.id, self.identity.device_id, envelope.device_id, value));
                                 self.refresh_counts();
                                 return Err(WorkerError::Blocked(self.status.last_error.clone().unwrap()));
@@ -357,7 +366,6 @@ impl ServerWorker {
                         // Reconnect so one malformed/unsupported frame cannot stop collection forever.
                         ServerEvent::Invalid => return Err(WorkerError::Transport),
                         ServerEvent::FatalError => {
-                            if let Some((id, _)) = in_flight.take() { self.dispatcher.block(&self.profile.id, id)?; }
                             return Err(WorkerError::Blocked(format!("服务器拒绝连接/上传: {}", value)));
                         }
                         ServerEvent::RetryableError => {
@@ -377,6 +385,9 @@ impl ServerWorker {
     }
 
     fn publish(&mut self, connection: ConnectionState) {
+        if connection != ConnectionState::Reconnecting {
+            self.status.next_retry_at_ms = None;
+        }
         self.status.connection = connection;
         self.status.heartbeat_alive = false;
         if connection != ConnectionState::Ready {
@@ -396,6 +407,26 @@ impl ServerWorker {
             let _ = self.status_tx.send(self.status.clone());
         }
     }
+}
+
+async fn send_message<S>(socket: &mut S, message: Message) -> Result<(), WorkerError>
+where
+    S: futures_util::Sink<Message, Error = tokio_tungstenite::tungstenite::Error> + Unpin,
+{
+    tokio::time::timeout(Duration::from_secs(15), socket.send(message))
+        .await
+        .map_err(|_| WorkerError::Connection("发送超时（15 秒）".into()))?
+        .map_err(|_| WorkerError::Transport)
+}
+
+async fn handshake_json<S>(socket: &mut S) -> Result<Value, WorkerError>
+where
+    S: StreamExt + Unpin,
+    S::Item: Into<Result<Message, tokio_tungstenite::tungstenite::Error>>,
+{
+    tokio::time::timeout(Duration::from_secs(15), next_json(socket))
+        .await
+        .map_err(|_| WorkerError::Connection("等待认证响应超时（15 秒）".into()))?
 }
 
 async fn next_json<S>(socket: &mut S) -> Result<Value, WorkerError>

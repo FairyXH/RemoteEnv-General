@@ -416,7 +416,7 @@ async fn phase_175c_runtime_uses_independent_dual_servers_and_recovery() {
 }
 
 #[tokio::test]
-async fn phase_175c_auth_failure_becomes_blocked_without_retry() {
+async fn phase_175c_auth_failure_retries_until_server_recovers() {
     let a = TestServer::start().await;
     a.auth_failure.store(true, Ordering::SeqCst);
     let dir = tempdir().unwrap();
@@ -451,7 +451,7 @@ async fn phase_175c_auth_failure_becomes_blocked_without_retry() {
             .servers
             .first()
             .map(|s| s.connection.to_string())
-            != Some("Blocked".into())
+            != Some("Reconnecting".into())
         {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
@@ -459,10 +459,74 @@ async fn phase_175c_auth_failure_becomes_blocked_without_retry() {
     .await
     .unwrap();
     assert_eq!(a.ready.load(Ordering::SeqCst), 0);
-    assert_eq!(runtime.status().connection.to_string(), "Blocked");
-    let attempts = a.auth_attempt_count();
-    tokio::time::sleep(Duration::from_millis(1500)).await;
-    assert_eq!(a.auth_attempt_count(), attempts);
+    assert!(runtime.status().servers[0].next_retry_at_ms.is_some());
+    a.wait_for(|server| server.auth_attempt_count() >= 3).await;
+    a.auth_failure.store(false, Ordering::SeqCst);
+    wait_ready(&runtime, 1).await;
+    assert_eq!(runtime.status().servers[0].next_retry_at_ms, None);
+    runtime.stop();
+}
+
+#[tokio::test]
+async fn silent_auth_times_out_and_rapid_mode_changes_remain_responsive() {
+    let a = TestServer::start().await;
+    let b = TestServer::start().await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let silent_url = format!("ws://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                if let Ok(mut socket) = accept_async(stream).await {
+                    while socket.next().await.is_some() {}
+                }
+            });
+        }
+    });
+    let dir = tempdir().unwrap();
+    let store = StateStore::open(
+        dir.path().join("state.sqlite3"),
+        dir.path().join("cache.sqlite3"),
+    )
+    .unwrap();
+    let mut identity = ClientConfig::default().identity;
+    identity.device_id = "silent-auth-device".into();
+    let mut config = config(identity, &a, &b);
+    config.server_profiles[0].url = silent_url;
+    config.server_mode = ServerMode::Multi;
+    let mut runtime = RuntimeSupervisor::start(config.clone(), store).unwrap();
+    wait_connection(&runtime, "a", "Authenticating").await;
+    tokio::time::timeout(
+        Duration::from_secs(18),
+        wait_connection(&runtime, "a", "Reconnecting"),
+    )
+    .await
+    .unwrap();
+    assert!(
+        runtime
+            .status()
+            .servers
+            .iter()
+            .find(|server| server.profile_id == "a")
+            .unwrap()
+            .last_error
+            .as_deref()
+            .unwrap()
+            .contains("认证响应超时")
+    );
+    wait_connection(&runtime, "a", "Authenticating").await;
+    for _ in 0..5 {
+        config.server_mode = ServerMode::Single;
+        config.active_server_id = Some("b".into());
+        runtime.update_config(config.clone()).unwrap();
+        config.server_mode = ServerMode::Multi;
+        runtime.update_config(config.clone()).unwrap();
+    }
+    config.server_mode = ServerMode::Single;
+    runtime.update_config(config).unwrap();
+    tokio::time::timeout(Duration::from_secs(2), wait_for_profiles(&runtime, &["b"]))
+        .await
+        .unwrap();
+    wait_ready(&runtime, 1).await;
     runtime.stop();
 }
 
@@ -538,7 +602,7 @@ async fn phase_175c_single_to_multi_and_rate_limit_keep_other_target_independent
     runtime.submit(event("limited")).unwrap();
     a.wait_for(|server| server.sequences().len() >= 2).await;
     b.wait_for(|server| !server.sequences().is_empty()).await;
-    wait_connection(&runtime, "b", "Blocked").await;
+    wait_connection(&runtime, "b", "Reconnecting").await;
     let second_sequence = a.sequences()[1];
     wait_delivery_status(
         &store,
@@ -558,7 +622,7 @@ async fn phase_175c_single_to_multi_and_rate_limit_keep_other_target_independent
     );
     let attempts = b.auth_attempt_count();
     let uploads = b.sequences().len();
-    // Updating unrelated settings must not resume a paused worker.
+    // Updating unrelated settings must not bypass the rate-limit cooldown.
     runtime.update_config(multi.clone()).unwrap();
     runtime.submit(event("after-limit")).unwrap();
     a.wait_for(|server| server.sequences().len() >= 3).await;
@@ -581,20 +645,34 @@ async fn phase_175c_single_to_multi_and_rate_limit_keep_other_target_independent
         .iter()
         .find(|server| server.profile_id == "b")
         .unwrap();
-    assert_eq!(paused.connection.to_string(), "Blocked");
+    assert_eq!(paused.connection.to_string(), "Reconnecting");
     assert_eq!(paused.in_flight, 0);
     assert!(paused.last_error.as_deref().unwrap().contains("限速"));
 
+    let retry_at = paused.next_retry_at_ms.unwrap();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+    assert!((20_000..=30_000).contains(&(retry_at - now)));
     b.rate_limit(false);
-    multi.server_profiles[1].enabled = false;
-    runtime.update_config(multi.clone()).unwrap();
-    wait_for_profiles(&runtime, &["a"]).await;
-    multi.server_profiles[1].enabled = true;
-    runtime.update_config(multi).unwrap();
+    tokio::time::timeout(Duration::from_secs(35), async {
+        while b.auth_attempt_count() == attempts {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
     wait_ready(&runtime, 2).await;
-    runtime.submit(event("resumed")).unwrap();
-    b.wait_for(|server| server.sequences().len() > uploads)
-        .await;
+    wait_delivery_status(
+        &store,
+        "b",
+        "transition-device",
+        "wifi",
+        second_sequence,
+        "completed",
+    )
+    .await;
     runtime.stop();
 }
 

@@ -1311,6 +1311,7 @@ fn connect_server_profile(
         status
             .servers
             .push(remote_env_core::worker::ServerWorkerStatus {
+                next_retry_at_ms: None,
                 profile_id: id.clone(),
                 connection: remote_env_core::transport::ConnectionState::Connecting,
                 heartbeat_alive: false,
