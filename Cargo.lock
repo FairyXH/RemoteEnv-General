@@ -2646,7 +2646,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "remote-env-core"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "futures-util",
  "native-tls",
@@ -2664,7 +2664,7 @@ dependencies = [
 
 [[package]]
 name = "remote-env-desktop"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "base64 0.22.1",
  "futures-util",
@@ -2687,7 +2687,7 @@ dependencies = [
 
 [[package]]
 name = "remote-env-platform-android"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "remote-env-core",
  "serde",
@@ -2697,21 +2697,21 @@ dependencies = [
 
 [[package]]
 name = "remote-env-platform-linux"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "remote-env-core",
 ]
 
 [[package]]
 name = "remote-env-platform-macos"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "remote-env-core",
 ]
 
 [[package]]
 name = "remote-env-platform-windows"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "remote-env-core",
  "serde",
