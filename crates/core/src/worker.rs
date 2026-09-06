@@ -347,10 +347,12 @@ impl ServerWorker {
                             self.refresh_counts();
                         }
                         ServerEvent::FatalError if value["code"] == "unknown_device" => {
-                            if let Some((_id, envelope)) = in_flight.take() {
-                                self.status.last_error = Some(format!("服务器拒绝数据设备身份: profile_id={}, auth_device_id={}, envelope_device_id={}, response={}", self.profile.id, self.identity.device_id, envelope.device_id, value));
+                            if let Some((id, envelope)) = in_flight.take() {
+                                in_flight_since = None;
+                                self.dispatcher.block(&self.profile.id, id)?;
+                                self.status.last_error = Some(format!("服务器拒绝数据设备身份，已隔离该条投递: profile_id={}, auth_device_id={}, envelope_device_id={}, response={}", self.profile.id, self.identity.device_id, envelope.device_id, value));
                                 self.refresh_counts();
-                                return Err(WorkerError::Blocked(self.status.last_error.clone().unwrap()));
+                                continue;
                             }
                             return Err(WorkerError::Blocked(format!("服务器拒绝设备身份: {}", value)));
                         }
@@ -366,7 +368,20 @@ impl ServerWorker {
                         // Reconnect so one malformed/unsupported frame cannot stop collection forever.
                         ServerEvent::Invalid => return Err(WorkerError::Transport),
                         ServerEvent::FatalError => {
-                            return Err(WorkerError::Blocked(format!("服务器拒绝连接/上传: {}", value)));
+                            if value["retryable"].as_bool() == Some(true) {
+                                return Err(WorkerError::RateLimited);
+                            }
+                            if let Some((id, envelope)) = in_flight.take() {
+                                in_flight_since = None;
+                                self.dispatcher.block(&self.profile.id, id)?;
+                                self.status.last_error = Some(format!(
+                                    "服务器拒绝单条上传，已隔离并继续后续投递: data_type={}, sequence={}, response={}",
+                                    envelope.data_type, envelope.sequence, value
+                                ));
+                                self.refresh_counts();
+                                continue;
+                            }
+                            return Err(WorkerError::Blocked(format!("服务器拒绝连接: {}", value)));
                         }
                         ServerEvent::RetryableError => {
                             return Err(WorkerError::RateLimited);

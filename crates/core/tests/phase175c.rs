@@ -23,6 +23,7 @@ struct TestServer {
     heartbeat_count: Arc<AtomicUsize>,
     pong_enabled: Arc<AtomicBool>,
     rate_limited: Arc<AtomicBool>,
+    reject_next_upload: Arc<AtomicBool>,
     disconnect: Arc<Notify>,
     changed: Arc<Notify>,
 }
@@ -54,6 +55,7 @@ impl TestServer {
         let heartbeat_count = Arc::new(AtomicUsize::new(0));
         let pong_enabled = Arc::new(AtomicBool::new(true));
         let rate_limited = Arc::new(AtomicBool::new(false));
+        let reject_next_upload = Arc::new(AtomicBool::new(false));
         let changed = Arc::new(Notify::new());
         let task_state = (
             received.clone(),
@@ -67,6 +69,7 @@ impl TestServer {
             heartbeat_count.clone(),
             pong_enabled.clone(),
             rate_limited.clone(),
+            reject_next_upload.clone(),
         );
         tokio::spawn(async move {
             loop {
@@ -130,6 +133,14 @@ impl TestServer {
                                         .await;
                                     continue;
                                 }
+                                if state.11.swap(false, Ordering::SeqCst) {
+                                    let _ = socket
+                                        .send(Message::Text(
+                                            r#"{"type":"error","code":"validation_error","message":"invalid payload","retryable":false}"#.into(),
+                                        ))
+                                        .await;
+                                    continue;
+                                }
                                 if state.4.load(Ordering::SeqCst) {
                                     let ack = serde_json::json!({"type":"data_result","success":true,"device_id":value["device_id"],"data_type":value["data_type"],"sequence":value["sequence"]});
                                     let _ =
@@ -163,6 +174,7 @@ impl TestServer {
             heartbeat_count,
             pong_enabled,
             rate_limited,
+            reject_next_upload,
             changed,
         }
     }
@@ -203,6 +215,10 @@ impl TestServer {
 
     fn pong(&self, enabled: bool) {
         self.pong_enabled.store(enabled, Ordering::SeqCst);
+    }
+
+    fn reject_next_upload(&self) {
+        self.reject_next_upload.store(true, Ordering::SeqCst);
     }
 }
 
@@ -812,6 +828,76 @@ async fn phase_175c_ack_isolation_leaves_b_pending_until_b_ack() {
     a.ack.store(true, Ordering::SeqCst);
     a.disconnect.notify_one();
     wait_complete(&store, "ack-device", "wifi", sequence).await;
+    runtime.stop();
+}
+
+#[tokio::test]
+async fn phase_175c_non_retryable_upload_error_blocks_only_rejected_delivery() {
+    let server = TestServer::start().await;
+    let other = TestServer::start().await;
+    let dir = tempdir().unwrap();
+    let store = StateStore::open(
+        dir.path().join("state.sqlite3"),
+        dir.path().join("state_cache.sqlite3"),
+    )
+    .unwrap();
+    let identity = DeviceIdentity {
+        device_id: "reject-device".into(),
+        device_name: "fixture".into(),
+        platform: "test".into(),
+        platform_version: "1".into(),
+        client_version: "1".into(),
+        hardware: None,
+    };
+    let mut config = config(identity, &server, &other);
+    config.server_profiles.truncate(1);
+    let mut runtime = RuntimeSupervisor::start(config.clone(), store.clone()).unwrap();
+    runtime
+        .set_collection_running(config.clone(), true)
+        .unwrap();
+    wait_ready(&runtime, 1).await;
+
+    server.reject_next_upload();
+    runtime.submit(event("rejected")).unwrap();
+    server
+        .wait_for(|server| server.sequences().len() == 1)
+        .await;
+    let rejected_sequence = server.sequences()[0];
+    wait_delivery_status(
+        &store,
+        "a",
+        "reject-device",
+        "wifi",
+        rejected_sequence,
+        "blocked",
+    )
+    .await;
+    runtime.update_config(config.clone()).unwrap();
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert_eq!(server.sequences().len(), 1);
+
+    runtime.submit(event("accepted")).unwrap();
+    server
+        .wait_for(|server| server.sequences().len() == 2)
+        .await;
+    let accepted_sequence = server.sequences()[1];
+    wait_delivery_status(
+        &store,
+        "a",
+        "reject-device",
+        "wifi",
+        accepted_sequence,
+        "completed",
+    )
+    .await;
+    assert_eq!(server.auth_attempt_count(), 1);
+    assert_eq!(runtime.status().servers[0].blocked, 1);
+    assert!(
+        runtime.status().servers[0]
+            .last_error
+            .as_deref()
+            .is_some_and(|message| message.contains("validation_error"))
+    );
     runtime.stop();
 }
 

@@ -1630,6 +1630,8 @@ fn spawn_status_bridge(app: tauri::AppHandle) {
         let mut last_scan_counts = (0_u64, 0_u64, 0_u64, 0_u64);
         let mut last_heartbeats: std::collections::HashMap<String, Option<i64>> =
             std::collections::HashMap::new();
+        let mut last_server_errors: std::collections::HashMap<String, Option<String>> =
+            std::collections::HashMap::new();
         loop {
             std::thread::sleep(Duration::from_millis(200));
             if app.state::<AppState>().exiting.load(Ordering::Acquire) {
@@ -1674,6 +1676,16 @@ fn spawn_status_bridge(app: tauri::AppHandle) {
                     last_scan_counts = counts;
                 }
                 for server in &status.servers {
+                    let previous_error = last_server_errors
+                        .insert(server.profile_id.clone(), server.last_error.clone());
+                    if previous_error.as_ref() != Some(&server.last_error) {
+                        if let Some(message) = &server.last_error {
+                            warn(format!(
+                                "服务器错误 profile_id={} connection={} message={}",
+                                server.profile_id, server.connection, message
+                            ));
+                        }
+                    }
                     let previous =
                         last_heartbeats.insert(server.profile_id.clone(), server.last_heartbeat_ms);
                     if previous != Some(server.last_heartbeat_ms) {

@@ -530,7 +530,6 @@ impl RuntimeSupervisor {
                     let mut supervisor = DispatcherSupervisor::new(dispatcher.clone(), config.identity.clone(), Duration::from_secs(5));
                     supervisor.apply_config(&config).await;
                     for profile in config.selected_servers() {
-                        let _ = dispatcher.unblock_target(&profile.id);
                         let _ = dispatcher.cancel_target_except_device(&profile.id, &profile.device_id);
                     }
                     let mut current_config = config;
@@ -650,7 +649,6 @@ impl RuntimeSupervisor {
                                 };
                                 supervisor.apply_config(&updated_config).await;
                                 for profile in updated_config.selected_servers() {
-                                    let _ = dispatcher.unblock_target(&profile.id);
                                     let _ = dispatcher.cancel_target_except_device(&profile.id, &profile.device_id);
                                 }
                                 if let Some(worker) = worker.as_ref() { worker.configure(true, Duration::from_secs(updated_config.scan_interval_seconds)); }
