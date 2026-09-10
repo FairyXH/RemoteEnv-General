@@ -39,6 +39,8 @@ pub enum ServerMode {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ClientConfig {
+    #[serde(default = "default_master_enabled")]
+    pub master_enabled: bool,
     pub server_url: String,
     pub token: String,
     #[serde(default)]
@@ -61,9 +63,14 @@ fn default_upload_interval_seconds() -> u64 {
     30
 }
 
+fn default_master_enabled() -> bool {
+    true
+}
+
 impl Default for ClientConfig {
     fn default() -> Self {
         Self {
+            master_enabled: true,
             server_url: "ws://127.0.0.1:8000/ws".into(),
             token: String::new(),
             server_profiles: Vec::new(),
