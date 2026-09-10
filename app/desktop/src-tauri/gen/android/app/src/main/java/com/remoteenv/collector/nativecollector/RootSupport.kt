@@ -4,7 +4,6 @@ import android.content.Context
 import java.io.File
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.Executors
-import java.util.concurrent.ScheduledFuture
 
 object RootSupport {
   data class Result(val success: Boolean, val message: String)
@@ -12,7 +11,6 @@ object RootSupport {
     Thread(task, "remote-env-root-protector").apply { isDaemon = true }
   }
   @Volatile private var protectionStarted = false
-  @Volatile private var protectionTask: ScheduledFuture<*>? = null
 
   fun available(): Boolean = sequenceOf("/system/bin/su", "/system/xbin/su", "/sbin/su", "/debug_ramdisk/su")
     .map(::File).any { it.exists() && it.canExecute() } || System.getenv("PATH").orEmpty().split(File.pathSeparator).any { File(it, "su").canExecute() }
@@ -37,18 +35,10 @@ object RootSupport {
     synchronized(this) {
       if (protectionStarted) return
       protectionStarted = true
-      protectionTask = protector.scheduleWithFixedDelay({
+      protector.scheduleWithFixedDelay({
         val enabled = context.getSharedPreferences("collector_persistence", Context.MODE_PRIVATE).getBoolean("root_enabled", false)
-        if (enabled && CollectorForegroundService.isMasterEnabled(context)) run(protectionCommands(context.packageName), 8)
+        if (enabled) run(protectionCommands(context.packageName), 8)
       }, 0, 30, TimeUnit.SECONDS)
-    }
-  }
-
-  fun stopProtection() {
-    synchronized(this) {
-      protectionTask?.cancel(true)
-      protectionTask = null
-      protectionStarted = false
     }
   }
 
