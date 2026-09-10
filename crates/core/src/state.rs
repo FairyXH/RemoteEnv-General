@@ -1,7 +1,7 @@
 use crate::config::{ClientConfig, DeviceIdentity, LoggingLevel};
 use crate::protocol::EnvironmentEnvelope;
 use rusqlite::{Connection, OptionalExtension, params};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
@@ -25,10 +25,13 @@ const CONFIG_SCHEMA: &str = "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; CR
 /// deleted and rebuilt at any time without losing user configuration.
 const STATE_SCHEMA: &str = "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; CREATE TABLE IF NOT EXISTS sequences (device_id TEXT NOT NULL, data_type TEXT NOT NULL, value INTEGER NOT NULL, PRIMARY KEY(device_id, data_type)); CREATE TABLE IF NOT EXISTS upload_queue (id INTEGER PRIMARY KEY AUTOINCREMENT, envelope_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', created_at_ms INTEGER NOT NULL DEFAULT 0, UNIQUE(envelope_json)); CREATE INDEX IF NOT EXISTS idx_upload_queue_pending ON upload_queue(status, id); CREATE TABLE IF NOT EXISTS upload_deliveries (id INTEGER PRIMARY KEY AUTOINCREMENT, target_id TEXT NOT NULL, envelope_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', created_at_ms INTEGER NOT NULL DEFAULT 0, UNIQUE(target_id, envelope_json)); CREATE INDEX IF NOT EXISTS idx_upload_deliveries_pending ON upload_deliveries(target_id, status, id);";
 
+const MAX_STATE_CACHE_BYTES: u64 = 64 * 1024 * 1024;
+
 #[derive(Clone)]
 pub struct StateStore {
     config: Arc<Mutex<Connection>>,
     state: Arc<Mutex<Connection>>,
+    state_path: Arc<PathBuf>,
 }
 
 impl StateStore {
@@ -41,10 +44,13 @@ impl StateStore {
         state_path: impl AsRef<Path>,
     ) -> Result<Self, StateError> {
         let config = Self::open_config(config_path.as_ref())?;
-        let state = Self::open_state(state_path.as_ref())?;
+        let state_path = state_path.as_ref().to_path_buf();
+        let state = Self::open_state(&state_path)?;
+        Self::enforce_state_cache_limit(&state, &state_path)?;
         Ok(Self {
             config: Arc::new(Mutex::new(config)),
             state: Arc::new(Mutex::new(state)),
+            state_path: Arc::new(state_path),
         })
     }
 
@@ -94,6 +100,35 @@ impl StateStore {
             let sidecar = base.with_file_name(format!("{name}{suffix}"));
             let _ = std::fs::remove_file(sidecar);
         }
+    }
+
+    fn state_cache_size(path: &Path) -> u64 {
+        ["", "-wal", "-shm"]
+            .into_iter()
+            .filter_map(|suffix| {
+                let file = if suffix.is_empty() {
+                    path.to_path_buf()
+                } else {
+                    let name = path.file_name()?.to_str()?;
+                    path.with_file_name(format!("{name}{suffix}"))
+                };
+                std::fs::metadata(file).ok().map(|metadata| metadata.len())
+            })
+            .sum()
+    }
+
+    fn enforce_state_cache_limit(
+        connection: &Connection,
+        state_path: &Path,
+    ) -> Result<bool, StateError> {
+        if Self::state_cache_size(state_path) <= MAX_STATE_CACHE_BYTES {
+            return Ok(false);
+        }
+
+        connection.execute_batch(
+            "DELETE FROM upload_deliveries; DELETE FROM upload_queue; PRAGMA wal_checkpoint(TRUNCATE); VACUUM; PRAGMA wal_checkpoint(TRUNCATE);",
+        )?;
+        Ok(true)
     }
 
     fn lock_config(&self) -> Result<std::sync::MutexGuard<'_, Connection>, StateError> {
@@ -292,6 +327,7 @@ impl StateStore {
             "INSERT OR IGNORE INTO upload_queue(envelope_json,status,created_at_ms) VALUES(?1,'pending',?2)",
             params![serde_json::to_string(envelope)?, Self::now_ms() as i64],
         )?;
+        Self::enforce_state_cache_limit(&connection, &self.state_path)?;
         Ok(inserted == 1)
     }
 
@@ -392,6 +428,7 @@ impl StateStore {
             "INSERT OR IGNORE INTO upload_deliveries(target_id,envelope_json,status,created_at_ms) VALUES(?1,?2,'pending',?3)",
             params![target_id, serde_json::to_string(envelope)?, Self::now_ms() as i64],
         )?;
+        Self::enforce_state_cache_limit(&c, &self.state_path)?;
         Ok(inserted == 1)
     }
 
@@ -635,3 +672,37 @@ impl StateStore {
 
 #[allow(dead_code)]
 fn _logging_level(_: LoggingLevel) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn oversized_state_cache_is_cleared_on_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("state.sqlite3");
+        let cache_path = dir.path().join("state_cache.sqlite3");
+        let connection = Connection::open(&cache_path).unwrap();
+        connection.execute_batch(STATE_SCHEMA).unwrap();
+        connection
+            .execute(
+                "INSERT INTO sequences(device_id,data_type,value) VALUES('device','wifi',42)",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO upload_deliveries(target_id,envelope_json,status,created_at_ms) VALUES('target',zeroblob(?1),'completed',0)",
+                params![(MAX_STATE_CACHE_BYTES + 1) as i64],
+            )
+            .unwrap();
+        drop(connection);
+        assert!(StateStore::state_cache_size(&cache_path) > MAX_STATE_CACHE_BYTES);
+
+        let store = StateStore::open(&config_path, &cache_path).unwrap();
+
+        assert_eq!(store.count_target_status("target", "completed").unwrap(), 0);
+        assert_eq!(store.latest_sequence("device", "wifi").unwrap(), 42);
+        assert!(StateStore::state_cache_size(&cache_path) <= MAX_STATE_CACHE_BYTES);
+    }
+}
