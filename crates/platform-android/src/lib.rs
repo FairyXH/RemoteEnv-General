@@ -34,6 +34,7 @@ mod android {
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct PersistenceSettings {
+        pub master_enabled: bool,
         pub foreground_enabled: bool,
         pub auto_start_enabled: bool,
         pub hide_from_recents: bool,
@@ -74,6 +75,16 @@ mod android {
     }
 
     impl<R: Runtime> AndroidCollector<R> {
+        pub fn set_master_enabled(&self, enabled: bool) -> Result<(), String> {
+            self.handle
+                .run_mobile_plugin::<serde_json::Value>(
+                    "setMasterEnabled",
+                    serde_json::json!({"enabled": enabled}),
+                )
+                .map(|_| ())
+                .map_err(|error| error.to_string())
+        }
+
         pub fn collect_all(&self) -> Result<Vec<CollectorEvent>, String> {
             let batch: NativeBatch = self
                 .handle

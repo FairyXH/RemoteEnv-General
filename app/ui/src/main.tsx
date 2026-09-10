@@ -13,6 +13,7 @@ type Server = {
 };
 type DetailItem = { label: string; value: string };
 type Config = {
+  master_enabled: boolean;
   device_id: string;
   server_mode: "Single" | "Multi";
   active_server_id: string | null;
@@ -129,6 +130,7 @@ const initialStatus: RuntimeStatus = {
   },
 };
 const emptyConfig: Config = {
+  master_enabled: true,
   device_id: "",
   server_mode: "Single",
   active_server_id: null,
@@ -713,6 +715,27 @@ function App() {
       setBusy(null);
     }
   };
+  const toggleMaster = async () => {
+    if (runtimeBusyRef.current) return;
+    runtimeBusyRef.current = true;
+    setBusy("master");
+    const enabled = !config.master_enabled;
+    try {
+      const next = await invoke<Config>("set_master_enabled", { enabled });
+      setConfig(next);
+      applyStatus(await invoke<RuntimeStatus>("get_runtime_status"));
+      if (!enabled) {
+        setScanData({ wifi: null, bluetooth: null, cell: null, gps: null, gnss: null });
+        setDetails(null);
+      }
+      setNotice(enabled ? "全部采集与服务器连接已恢复。" : "已停止全部采集并断开所有服务器连接。");
+    } catch (error) {
+      setNotice(`全局主开关操作失败：${String(error)}`);
+    } finally {
+      runtimeBusyRef.current = false;
+      setBusy(null);
+    }
+  };
   const connect = async (id: string) => {
     if (!serverActionAllowed(id) || !beginConfigChange()) return;
     const previous = config;
@@ -1000,7 +1023,7 @@ function App() {
   };
 
   return (
-    <main className="shell">
+    <main className={`shell ${config.master_enabled ? "" : "master-off"}`}>
       <header className="topbar">
         <div>
           <p>远程环境采集器</p>
@@ -1013,6 +1036,21 @@ function App() {
           ● {stateText(status.connection)}
         </div>
       </header>
+      <section className={`master-control ${config.master_enabled ? "enabled" : "disabled"}`}>
+        <div>
+          <h2>总开关</h2>
+          <span>{config.master_enabled ? "采集与服务器连接已启用" : "全部采集已停止，服务器已断开"}</span>
+        </div>
+        <label className="master-switch">
+          <input
+            type="checkbox"
+            checked={config.master_enabled}
+            disabled={busy !== null}
+            onChange={toggleMaster}
+          />
+          <span>{busy === "master" ? "切换中…" : config.master_enabled ? "已开启" : "已关闭"}</span>
+        </label>
+      </section>
       {!persistence?.is_android && (
         <p className="hint">
           自启动托盘模式：给程序快捷方式或启动命令追加参数 <code>--tray</code>

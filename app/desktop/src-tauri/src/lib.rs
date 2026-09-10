@@ -181,6 +181,7 @@ pub struct ServerProfileView {
 
 #[derive(Debug, Clone, Serialize)]
 struct DesktopConfigView {
+    master_enabled: bool,
     device_id: String,
     server_mode: ServerMode,
     active_server_id: Option<String>,
@@ -207,6 +208,7 @@ struct ConnectionTestResult {
 #[derive(Debug, Clone, Serialize)]
 struct PersistenceSettingsView {
     is_android: bool,
+    master_enabled: bool,
     foreground_enabled: bool,
     auto_start_enabled: bool,
     hide_from_recents: bool,
@@ -234,6 +236,7 @@ fn get_persistence_settings(app: tauri::AppHandle) -> Result<PersistenceSettings
             .persistence_settings()?;
         return Ok(PersistenceSettingsView {
             is_android: true,
+            master_enabled: settings.master_enabled,
             foreground_enabled: settings.foreground_enabled,
             auto_start_enabled: settings.auto_start_enabled,
             hide_from_recents: settings.hide_from_recents,
@@ -257,6 +260,7 @@ fn get_persistence_settings(app: tauri::AppHandle) -> Result<PersistenceSettings
         let _ = app;
         Ok(PersistenceSettingsView {
             is_android: false,
+            master_enabled: true,
             foreground_enabled: false,
             auto_start_enabled: false,
             hide_from_recents: false,
@@ -1019,6 +1023,7 @@ mod protect {
 
 fn config_view(config: &ClientConfig) -> DesktopConfigView {
     DesktopConfigView {
+        master_enabled: config.master_enabled,
         device_id: config.identity.device_id.clone(),
         server_mode: config.server_mode,
         active_server_id: config.active_server_id.clone(),
@@ -1095,6 +1100,30 @@ fn get_desktop_config(state: State<'_, AppState>) -> Result<DesktopConfigView, S
             error(format!("get_desktop_config 失败: {message}"));
             message
         })?;
+    Ok(config_view(&config))
+}
+
+#[tauri::command]
+fn set_master_enabled(
+    enabled: bool,
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<DesktopConfigView, String> {
+    let (store, mut config) = load_config(&state.state_path, &state.state_cache_path)?;
+    config.master_enabled = enabled;
+    save_config(&store, &config)?;
+
+    #[cfg(target_os = "android")]
+    app.state::<remote_env_platform_android::AndroidCollector<tauri::Wry>>()
+        .set_master_enabled(enabled)?;
+
+    if enabled {
+        if !config.selected_servers().is_empty() {
+            start_runtime(app, state)?;
+        }
+    } else {
+        stop_runtime(app, state)?;
+    }
     Ok(config_view(&config))
 }
 
@@ -1294,6 +1323,9 @@ fn connect_server_profile(
 ) -> Result<RuntimeStatus, String> {
     info(format!("收到服务器连接请求 profile_id={id}"));
     let (store, mut config) = load_config(&state.state_path, &state.state_cache_path)?;
+    if !config.master_enabled {
+        return Err("全局主开关已关闭。".into());
+    }
     let profile = config
         .server_profiles
         .iter()
@@ -1375,7 +1407,11 @@ fn connect_server_profile(
 
 #[tauri::command]
 #[cfg(windows)]
-async fn scan_wifi_now() -> Result<CollectorEvent, String> {
+async fn scan_wifi_now(state: State<'_, AppState>) -> Result<CollectorEvent, String> {
+    let (_, config) = load_config(&state.state_path, &state.state_cache_path)?;
+    if !config.master_enabled {
+        return Err("全局主开关已关闭。".into());
+    }
     tauri::async_runtime::spawn_blocking(|| {
         let result = NativeWlanProvider::new().scan();
         match result {
@@ -1408,7 +1444,11 @@ async fn scan_wifi_now() -> Result<CollectorEvent, String> {
 
 #[tauri::command]
 #[cfg(windows)]
-async fn scan_bluetooth_now() -> Result<CollectorEvent, String> {
+async fn scan_bluetooth_now(state: State<'_, AppState>) -> Result<CollectorEvent, String> {
+    let (_, config) = load_config(&state.state_path, &state.state_cache_path)?;
+    if !config.master_enabled {
+        return Err("全局主开关已关闭。".into());
+    }
     tauri::async_runtime::spawn_blocking(|| {
         BluetoothCollector::new(
             NativeBleScanner::new(),
@@ -1434,9 +1474,14 @@ async fn scan_bluetooth_now() -> Result<CollectorEvent, String> {
 async fn scan_android_environment_now(
     data_type: String,
     app: tauri::AppHandle,
+    state: State<'_, AppState>,
 ) -> Result<CollectorEvent, String> {
     #[cfg(target_os = "android")]
     {
+        let (_, config) = load_config(&state.state_path, &state.state_cache_path)?;
+        if !config.master_enabled {
+            return Err("全局主开关已关闭。".into());
+        }
         if !matches!(
             data_type.as_str(),
             "wifi" | "bluetooth" | "cell" | "gps" | "gnss"
@@ -1456,7 +1501,7 @@ async fn scan_android_environment_now(
     }
     #[cfg(not(target_os = "android"))]
     {
-        let _ = (data_type, app);
+        let _ = (data_type, app, state);
         Err("该采集入口仅适用于 Android。".into())
     }
 }
@@ -1468,6 +1513,9 @@ async fn test_server_profile(
 ) -> Result<ConnectionTestResult, String> {
     info(format!("收到服务器测试请求 profile_id={id}"));
     let (_, config) = load_config(&state.state_path, &state.state_cache_path)?;
+    if !config.master_enabled {
+        return Err("全局主开关已关闭。".into());
+    }
     let profile = config
         .server_profiles
         .iter()
@@ -1543,6 +1591,9 @@ fn start_runtime(
 ) -> Result<RuntimeStatus, String> {
     info("收到启动采集服务请求");
     let (store, config) = load_config(&state.state_path, &state.state_cache_path)?;
+    if !config.master_enabled {
+        return Err("全局主开关已关闭。".into());
+    }
     if config.selected_servers().is_empty() {
         return Err("请先新增并启用至少一个服务器配置。".into());
     }
@@ -1789,7 +1840,9 @@ pub fn run_app(tray_start: bool) {
                 std::thread::sleep(Duration::from_millis(500));
                 let state = startup_handle.state::<AppState>();
                 let configured = load_config(&state.state_path, &state.state_cache_path)
-                    .map(|(_, config)| !config.selected_servers().is_empty())
+                    .map(|(_, config)| {
+                        config.master_enabled && !config.selected_servers().is_empty()
+                    })
                     .unwrap_or(false);
                 if configured {
                     match start_runtime(startup_handle.clone(), state) {
@@ -1811,6 +1864,7 @@ pub fn run_app(tray_start: bool) {
             get_log_path,
             get_runtime_status,
             get_desktop_config,
+            set_master_enabled,
             save_server_profile,
             delete_server_profile,
             set_runtime_options,
