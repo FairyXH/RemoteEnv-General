@@ -77,6 +77,7 @@ fn identity_is_created_once_and_config_is_round_trippable() {
     assert_eq!(first.device_id, second.device_id);
     assert_eq!(second.device_name, "Desktop");
     let config = ClientConfig {
+        master_enabled: true,
         server_url: "ws://example.invalid/ws".into(),
         token: "secret".into(),
         server_profiles: Vec::new(),

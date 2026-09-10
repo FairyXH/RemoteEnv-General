@@ -42,6 +42,7 @@ input {
     max(24px, env(safe-area-inset-left));
 }
 .topbar,
+.master-control,
 .runtime,
 .heading,
 .server,
@@ -53,6 +54,7 @@ input {
   gap: 12px;
 }
 .topbar,
+.master-control,
 .runtime,
 .heading {
   justify-content: space-between;
@@ -74,6 +76,45 @@ h2 {
   color: #78c5ba;
   font-size: 13px;
   margin-bottom: 5px;
+}
+.master-control {
+  margin-top: 16px;
+  padding: 16px;
+  border: 1px solid #3f786f;
+  border-radius: 6px;
+  background: #162b2b;
+}
+.master-control.disabled {
+  border-color: #745454;
+  background: #2a2022;
+}
+.master-control > div {
+  display: grid;
+  gap: 5px;
+}
+.master-control span {
+  color: #a9bbb9;
+  font-size: 12px;
+}
+.master-switch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+.master-switch input {
+  width: 22px;
+  height: 22px;
+  accent-color: #42aa9a;
+}
+.master-switch span {
+  min-width: 48px;
+  color: #e8edf3;
+  font-size: 14px;
+  font-weight: 650;
+}
+.master-off > :not(.topbar):not(.master-control):not(.notice) {
+  display: none;
 }
 .device,
 .heading span,

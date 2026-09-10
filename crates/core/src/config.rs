@@ -168,3 +168,18 @@ impl ClientConfig {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_config_defaults_master_switch_to_enabled() {
+        let mut value = serde_json::to_value(ClientConfig::default()).unwrap();
+        value.as_object_mut().unwrap().remove("master_enabled");
+
+        let config: ClientConfig = serde_json::from_value(value).unwrap();
+
+        assert!(config.master_enabled);
+    }
+}
