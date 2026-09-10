@@ -18,6 +18,9 @@ import org.json.JSONObject
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class CollectorForegroundService : Service() {
   private val collectorExecutor = Executors.newSingleThreadScheduledExecutor { task ->
@@ -36,18 +39,14 @@ class CollectorForegroundService : Service() {
       getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
     }
     val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-    val notification = NotificationCompat.Builder(this, CHANNEL)
-      .setSmallIcon(R.mipmap.ic_launcher)
-      .setContentTitle("远程环境采集器正在运行")
-      .setContentText("持续采集并上传已授权的环境数据")
-      .setOngoing(true).setOnlyAlertOnce(true).setContentIntent(open).build()
-    startForeground(NOTIFICATION_ID, notification)
+    startForeground(NOTIFICATION_ID, buildNotification("正在启动", "等待首次状态更新", open))
   }
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
     if (!isMasterEnabled(applicationContext)) {
       collectionTask?.cancel(true)
       runCatching { HeadlessRuntime.nativeStop() }
+      updateNotification(null)
       return START_STICKY
     }
     startHeadlessRuntime()
@@ -63,8 +62,10 @@ class CollectorForegroundService : Service() {
       val error = runCatching { JSONObject(result).optString("error").takeIf(String::isNotBlank) }.getOrNull()
       if (error != null) {
         Log.e(TAG, "Headless runtime start failed: $error")
+        updateNotification(result)
         return@execute
       }
+      updateNotification(result)
       scheduleCollection(0)
     }
   }
@@ -78,6 +79,7 @@ class CollectorForegroundService : Service() {
         val events = EnvironmentCollectorPlugin.collectAllEvents(applicationContext)
         val result = HeadlessRuntime.nativeSubmitEvents(events.toString())
         if (result != "ok") Log.e(TAG, "Headless event submit failed: $result")
+        updateNotification(runCatching { HeadlessRuntime.nativeStatus() }.getOrNull())
       } catch (error: Exception) {
         Log.e(TAG, "Headless collection failed", error)
       } finally {
@@ -86,6 +88,29 @@ class CollectorForegroundService : Service() {
         scheduleCollection(next)
       }
     }, delayMillis, TimeUnit.MILLISECONDS)
+  }
+
+  private fun buildNotification(text: String, updated: String, open: PendingIntent? = null) =
+    NotificationCompat.Builder(this, CHANNEL)
+      .setSmallIcon(R.mipmap.ic_launcher)
+      .setContentTitle("远程环境采集器")
+      .setContentText(text)
+      .setSubText(updated)
+      .setStyle(NotificationCompat.BigTextStyle().bigText("$text\n$updated"))
+      .setOngoing(true).setOnlyAlertOnce(true)
+      .setContentIntent(open ?: PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
+      .build()
+
+  private fun updateNotification(statusJson: String?) {
+    val updated = "更新 ${SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())}"
+    val text = if (!isMasterEnabled(applicationContext)) {
+      "采集已关闭 · 服务器已断开"
+    } else {
+      val status = runCatching { JSONObject(statusJson.orEmpty()) }.getOrNull()
+      if (status == null || status.has("error")) "状态暂不可用"
+      else "成功 ${status.optLong("uploaded")} · 失败 ${status.optLong("failed")} · 待传 ${status.optLong("pending") + status.optLong("in_flight")}"
+    }
+    getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, buildNotification(text, updated))
   }
 
   override fun onTaskRemoved(rootIntent: Intent?) {

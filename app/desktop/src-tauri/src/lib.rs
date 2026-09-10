@@ -787,6 +787,20 @@ mod android_headless {
     }
 
     #[unsafe(no_mangle)]
+    pub extern "system" fn Java_com_remoteenv_collector_nativecollector_HeadlessRuntime_nativeStatus(
+        mut env: JNIEnv<'_>,
+        _class: JClass<'_>,
+    ) -> jstring {
+        let result = serde_json::to_string(&status()).unwrap_or_else(|error| {
+            format!(
+                r#"{{"error":{}}}"#,
+                serde_json::to_string(&error.to_string()).unwrap_or_else(|_| "\"unknown\"".into())
+            )
+        });
+        java_string(&mut env, result)
+    }
+
+    #[unsafe(no_mangle)]
     pub extern "system" fn Java_com_remoteenv_collector_nativecollector_HeadlessRuntime_nativeSubmitEvents(
         mut env: JNIEnv<'_>,
         _class: JClass<'_>,
