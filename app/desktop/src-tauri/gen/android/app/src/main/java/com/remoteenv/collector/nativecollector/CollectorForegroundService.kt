@@ -32,6 +32,7 @@ class CollectorForegroundService : Service() {
 
   override fun onCreate() {
     super.onCreate()
+    active = this
     RootSupport.startProtection(applicationContext)
     if (Build.VERSION.SDK_INT >= 26) {
       val channel = NotificationChannel(CHANNEL, "环境采集服务", NotificationManager.IMPORTANCE_LOW)
@@ -44,9 +45,7 @@ class CollectorForegroundService : Service() {
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
     if (!isMasterEnabled(applicationContext)) {
-      collectionTask?.cancel(true)
-      runCatching { HeadlessRuntime.nativeStop() }
-      updateNotification(null)
+      stopCollection()
       return START_STICKY
     }
     startHeadlessRuntime()
@@ -90,6 +89,13 @@ class CollectorForegroundService : Service() {
     }, delayMillis, TimeUnit.MILLISECONDS)
   }
 
+  private fun stopCollection() {
+    collectionTask?.cancel(true)
+    collectionTask = null
+    runCatching { HeadlessRuntime.nativeStop() }
+    updateNotification(null)
+  }
+
   private fun buildNotification(text: String, updated: String, open: PendingIntent? = null) =
     NotificationCompat.Builder(this, CHANNEL)
       .setSmallIcon(R.mipmap.ic_launcher)
@@ -125,8 +131,10 @@ class CollectorForegroundService : Service() {
 
   override fun onDestroy() {
     collectionTask?.cancel(true)
+    collectionTask = null
     collectorExecutor.shutdownNow()
     runCatching { HeadlessRuntime.nativeStop() }
+    if (active === this) active = null
     super.onDestroy()
   }
 
@@ -136,12 +144,14 @@ class CollectorForegroundService : Service() {
     private const val TAG = "RemoteEnvCollector"
     private const val PREFS = "collector_persistence"
     private const val MASTER_ENABLED = "master_enabled"
+    @Volatile private var active: CollectorForegroundService? = null
 
     fun isMasterEnabled(context: Context): Boolean =
       context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(MASTER_ENABLED, true)
 
     fun setMasterEnabled(context: Context, enabled: Boolean) {
       context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(MASTER_ENABLED, enabled).commit()
+      if (!enabled) active?.stopCollection()
     }
 
     fun setEnabled(context: Context, enabled: Boolean) {
