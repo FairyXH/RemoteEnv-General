@@ -49,6 +49,7 @@ class EnvironmentCollectorPlugin(private val host: Activity) : Plugin(host) {
   fun collectAll(invoke: Invoke) {
     Thread {
       try {
+        check(CollectorForegroundService.isMasterEnabled(host)) { "全局主开关已关闭" }
         val response = JSObject()
         response.put("events", collectAllEvents(host.applicationContext))
         invoke.resolve(response)
@@ -67,6 +68,7 @@ class EnvironmentCollectorPlugin(private val host: Activity) : Plugin(host) {
     val power = host.getSystemService(Context.POWER_SERVICE) as PowerManager
     val response = JSObject()
     response.put("foreground_enabled", preferences.getBoolean("foreground_enabled", false))
+    response.put("master_enabled", CollectorForegroundService.isMasterEnabled(host))
     response.put("auto_start_enabled", preferences.getBoolean("auto_start_enabled", false))
     response.put("hide_from_recents", preferences.getBoolean("hide_from_recents", false))
     response.put("accessibility_enabled", accessibilityEnabled())
@@ -148,6 +150,15 @@ class EnvironmentCollectorPlugin(private val host: Activity) : Plugin(host) {
       CollectorForegroundService.setEnabled(host, enabled)
       val response = JSObject(); response.put("enabled", enabled); invoke.resolve(response)
     }.onFailure { invoke.reject(it.message) }
+  }
+
+  @Command
+  fun setMasterEnabled(invoke: Invoke) {
+    runCatching {
+      val enabled = invoke.parseArgs(ToggleArgs::class.java).enabled
+      CollectorForegroundService.setMasterEnabled(host, enabled)
+      val response = JSObject(); response.put("enabled", enabled); invoke.resolve(response)
+    }.onFailure { invoke.reject(it.message ?: it.javaClass.simpleName) }
   }
 
   @Command
@@ -237,6 +248,7 @@ class EnvironmentCollectorPlugin(private val host: Activity) : Plugin(host) {
   private fun now() = System.currentTimeMillis()
 
   fun collectAllEvents(context: Context): JSONArray = JSONArray().apply {
+    if (!CollectorForegroundService.isMasterEnabled(context)) return@apply
     put(runCatching { wifiEvent(context) }.getOrNull() ?: emptyWifi())
     put(runCatching { bluetoothEvent(context) }.getOrNull() ?: emptyBluetooth())
     put(runCatching { cellEvent(context) }.getOrNull() ?: emptyCell())

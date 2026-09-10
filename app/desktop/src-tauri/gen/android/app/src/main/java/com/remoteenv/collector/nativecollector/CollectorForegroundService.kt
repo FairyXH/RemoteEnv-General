@@ -45,6 +45,10 @@ class CollectorForegroundService : Service() {
   }
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+    if (!isMasterEnabled(applicationContext)) {
+      stopSelf()
+      return START_NOT_STICKY
+    }
     startHeadlessRuntime()
     return START_STICKY
   }
@@ -66,6 +70,10 @@ class CollectorForegroundService : Service() {
 
   private fun scheduleCollection(delayMillis: Long) {
     collectionTask = collectorExecutor.schedule({
+      if (!isMasterEnabled(applicationContext)) {
+        stopSelf()
+        return@schedule
+      }
       try {
         val events = EnvironmentCollectorPlugin.collectAllEvents(applicationContext)
         val result = HeadlessRuntime.nativeSubmitEvents(events.toString())
@@ -82,7 +90,7 @@ class CollectorForegroundService : Service() {
 
   override fun onTaskRemoved(rootIntent: Intent?) {
     val preferences = getSharedPreferences("collector_persistence", Context.MODE_PRIVATE)
-    if (preferences.getBoolean("foreground_enabled", false) || preferences.getBoolean("auto_start_enabled", false)) {
+    if (isMasterEnabled(applicationContext) && (preferences.getBoolean("foreground_enabled", false) || preferences.getBoolean("auto_start_enabled", false))) {
       val restart = PendingIntent.getService(this, 1003, Intent(this, CollectorForegroundService::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
       val alarm = getSystemService(Context.ALARM_SERVICE) as AlarmManager
       alarm.setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, android.os.SystemClock.elapsedRealtime() + 5_000, restart)
@@ -101,10 +109,23 @@ class CollectorForegroundService : Service() {
     private const val CHANNEL = "remote_env_collection"
     private const val NOTIFICATION_ID = 1002
     private const val TAG = "RemoteEnvCollector"
+    private const val PREFS = "collector_persistence"
+    private const val MASTER_ENABLED = "master_enabled"
+
+    fun isMasterEnabled(context: Context): Boolean =
+      context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(MASTER_ENABLED, true)
+
+    fun setMasterEnabled(context: Context, enabled: Boolean) {
+      context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(MASTER_ENABLED, enabled).commit()
+      if (!enabled) {
+        context.stopService(Intent(context, CollectorForegroundService::class.java))
+      }
+    }
+
     fun setEnabled(context: Context, enabled: Boolean) {
       val intent = Intent(context, CollectorForegroundService::class.java)
-      if (enabled) ContextCompat.startForegroundService(context, intent) else context.stopService(intent)
-      context.getSharedPreferences("collector_persistence", Context.MODE_PRIVATE).edit().putBoolean("foreground_enabled", enabled).apply()
+      if (enabled && isMasterEnabled(context)) ContextCompat.startForegroundService(context, intent) else context.stopService(intent)
+      context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean("foreground_enabled", enabled).apply()
     }
   }
 }
