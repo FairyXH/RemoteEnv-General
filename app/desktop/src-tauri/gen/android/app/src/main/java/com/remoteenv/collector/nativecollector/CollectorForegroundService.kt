@@ -118,7 +118,11 @@ class CollectorForegroundService : Service() {
     fun setMasterEnabled(context: Context, enabled: Boolean) {
       context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(MASTER_ENABLED, enabled).commit()
       if (!enabled) {
+        CollectorAccessibilityService.stopMaintenance()
+        RootSupport.stopProtection()
         context.stopService(Intent(context, CollectorForegroundService::class.java))
+      } else if (context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean("root_enabled", false)) {
+        RootSupport.startProtection(context.applicationContext)
       }
     }
 
